@@ -1,0 +1,1660 @@
+# SPDX-FileCopyrightText: 2026 Latere AI
+# SPDX-License-Identifier: Apache-2.0
+#
+# The HTTP API of sermod. The server's tests hold this document to the routes
+# it registers, to the Go types of their bodies and to the error codes it
+# answers, so a route, a body member or an error code that changes on one
+# side fails the build until the other follows.
+openapi: 3.1.0
+info:
+  title: Sermo
+  summary: Delivery of end-to-end encrypted conversations between people, over MLS.
+  description: >-
+    Sermo delivers the messages of conversations that people's devices
+    encrypt with Messaging Layer Security (MLS, RFC 9420). It keeps the
+    directory of each person's devices and the key packages they offer,
+    orders each conversation's messages in one log, and keeps the backup key
+    a person's devices share, sealed. It stores ciphertext and the public
+    state of each group, and never reads what people write.
+
+
+    **Who calls.** Every request carries a bearer token from the OpenID
+    Connect issuer the operator of the server configures. A person is the
+    `sub` claim of their token: every `person` in a path or a body is that
+    value.
+
+
+    **Devices.** A request a device makes as itself names the device in
+    the `Sermo-Device` header. The device must be one of the caller's,
+    registered and not revoked, or the request is refused with
+    `not_your_device`. Operations that act for a device need the header;
+    on the others it is optional, and checked when present.
+
+
+    **Bodies.** Requests and answers are JSON. Bytes, such as an MLS
+    message, a key package or a public key, are strings in standard base64
+    with `=` padding. A request body is one JSON value, and a member this
+    document does not describe is refused with `unknown_field`. The
+    operator bounds the size of a request body, 8 MiB by default; a larger
+    body is refused with `too_large`.
+
+
+    **Errors.** A refusal answers
+    `{"error": {"code": "...", "message": "...", "details": {"detail": "..."}}}`.
+    Branch on `code`. `message` is one fixed sentence for the code, written
+    for the person using your app. `details.detail` says what was wrong with
+    this request, for you; it is absent when there is nothing to add, and
+    its wording may change.
+
+
+    **Authorization.** The server asks the operator's authorizer whether
+    the caller may do what a request asks, as the action each operation
+    names. A refusal is `forbidden`, and an authorizer that gives no answer
+    is `authorizer_unavailable`, which is worth retrying.
+  version: v1
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: https://sermo.example
+    description: An example. Use the address of the server you call.
+security:
+  - bearer: []
+tags:
+  - name: Service
+    description: What a device needs to know about this server.
+  - name: Directory
+    description: The records of each person's devices and the revocations of their keys.
+  - name: Backup
+    description: The recovery record, and the backup key a person's devices share.
+  - name: Key packages
+    description: The key packages a device offers, which others claim to add it to a conversation.
+  - name: Conversations
+    description: Conversations, their group state and who is in them.
+  - name: Messages
+    description: The ordered log of each conversation's MLS messages.
+  - name: Welcomes
+    description: The Welcome messages that let a device join a conversation it was added to.
+paths:
+  /v1/messaging/service:
+    get:
+      operationId: getService
+      tags: [Service]
+      summary: Get the external sender a new conversation's group must name
+      description: >-
+        Answers the key and identity of this server as an MLS external
+        sender. Every conversation's group names it as its one external
+        sender, which lets the server propose removing a revoked device's
+        leaves. Put it in the group's extensions before creating a
+        conversation. Not authorized beyond the token.
+      parameters:
+        - $ref: "#/components/parameters/DeviceOptional"
+      responses:
+        "200":
+          description: The server's external sender.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Service"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/NotYourDevice"
+          description: "`not_your_device`: the `Sermo-Device` header names no device of the caller's that stands."
+        "500":
+          $ref: "#/components/responses/Internal"
+  /v1/messaging/people/{person}/devices:
+    get:
+      operationId: listDevices
+      tags: [Directory]
+      summary: List a person's device records and revocations
+      description: >-
+        Answers every record of the person's directory, revoked ones
+        included, and every revocation of their keys, so the caller can
+        verify the directory itself before trusting a key in it. A person
+        with no records answers two empty lists. Authorized as
+        `device.list`.
+      parameters:
+        - $ref: "#/components/parameters/Person"
+        - $ref: "#/components/parameters/DeviceOptional"
+      responses:
+        "200":
+          description: The person's directory as the server holds it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/devices/{device}:
+    put:
+      operationId: registerDevice
+      tags: [Directory]
+      summary: Register one of your devices
+      description: >-
+        Registers a device record of the caller's under the id in the path.
+        A person's first device vouches for itself and becomes a root; every
+        later device is vouched for by one of the person's records. A new
+        device that is not registered yet sends no `Sermo-Device` header.
+        Registering the same record again changes nothing, and a record with
+        the same keys vouched for again replaces the earlier one, as a person
+        does for a device a revoked key vouched for. Authorized as
+        `device.register`.
+      parameters:
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/DeviceOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceRecord"
+      responses:
+        "204":
+          description: The record is registered.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: the record's `id` is not the path's device; it is not
+            a device record of the caller; its signatures do not verify; its
+            voucher's key is revoked; or it does not stand with the caller's
+            other records. `unknown_field`: the body has a member a device
+            record does not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "409":
+          $ref: "#/components/responses/Exists"
+          description: >-
+            `exists`: the record's key is revoked, or the id is registered
+            with other keys.
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: >-
+            `too_large`: the body is over the server's bound, or the person
+            has 256 records already.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/revocations:
+    post:
+      operationId: revokeKey
+      tags: [Directory]
+      summary: Revoke one of your keys
+      description: >-
+        Revokes a signature key of the caller's, a device's or the recovery
+        record's, with a revocation signed by one of the caller's records
+        under the same root. The revoked device's key packages and any
+        backup key left for it are deleted, and the server proposes the
+        removal of every leaf with the key from each of the caller's
+        conversations; a device of each conversation then commits the
+        removal. A revocation that changes nothing the directory holds is
+        not kept again, and the removals are proposed again, so sending it
+        again retries proposals that failed. Authorized as `device.delete`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Revocation"
+      responses:
+        "204":
+          description: The key is revoked and its removal proposed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: the revocation is not of a key of the caller's, or it
+            does not verify against the caller's records. `unknown_field`:
+            the body has a member a revocation does not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: >-
+            `too_large`: the body is over the server's bound, or the person
+            has 512 revocations already.
+        "500":
+          $ref: "#/components/responses/Internal"
+          description: >-
+            `internal`: something failed on the server's side. The
+            revocation may have been kept while a removal could not be
+            proposed; send it again.
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/recovery:
+    put:
+      operationId: putRecovery
+      tags: [Backup]
+      summary: Register your recovery record and wrapped backup key
+      description: >-
+        Registers the caller's recovery record, vouched for by one of their
+        devices, with the backup key wrapped under the recovery key. A
+        person has one recovery record that stands: to register a new one,
+        revoke the old one first. Putting the same record again replaces
+        the wrapped backup key. The server cannot open the wrapped key.
+        Authorized as `backup.recovery`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Recovery"
+      responses:
+        "204":
+          description: The recovery record and the wrapped key are registered.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: the record is not a recovery record of the caller's;
+            `wrapped` is empty or over 4096 bytes; the record's signatures
+            do not verify; or it does not stand with the caller's other
+            records. `unknown_field`: the body has a member this one does
+            not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "409":
+          $ref: "#/components/responses/Exists"
+          description: >-
+            `exists`: another recovery record stands and was not revoked;
+            the record's key is revoked; or its id is registered with other
+            keys.
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: >-
+            `too_large`: the body is over the server's bound, or the person
+            has 256 records already.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+    get:
+      operationId: getRecovery
+      tags: [Backup]
+      summary: Get your recovery record and wrapped backup key
+      description: >-
+        Answers the caller's recovery record and the backup key wrapped
+        under the recovery key, for a new device that holds the recovery
+        key to open. Authorized as `backup.recovery`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceOptional"
+      responses:
+        "200":
+          description: The recovery record and the wrapped backup key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Recovery"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: the caller has no recovery record that stands."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/devices/{device}/transfer:
+    post:
+      operationId: leaveTransfer
+      tags: [Backup]
+      summary: Leave the backup key sealed to one of your new devices
+      description: >-
+        Leaves the backup key, sealed to one of the caller's devices, for
+        that device to fetch once. It replaces anything left for the device
+        before. The server cannot open it. Authorized as `device.vouch`.
+      parameters:
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/DeviceOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Transfer"
+      responses:
+        "204":
+          description: The sealed backup key is left for the device.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: `sealed` is empty or over 4096 bytes.
+            `unknown_field`: the body has a member this one does not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: the path's device is not a device of the caller's that stands."
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: "`too_large`: the body is over the server's bound."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+    get:
+      operationId: takeTransfer
+      tags: [Backup]
+      summary: Fetch the backup key left for this device
+      description: >-
+        Answers the backup key another of the caller's devices left for the
+        calling device, and deletes it, so it is fetched once. The path's
+        device is the calling device. Authorized as `device.vouch`.
+      parameters:
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/DeviceRequired"
+      responses:
+        "200":
+          description: The backup key sealed to the calling device.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transfer"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the path's
+            device is not the calling device, or the authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: nothing is left for this device, or it was fetched already."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/key-packages:
+    post:
+      operationId: publishKeyPackages
+      tags: [Key packages]
+      summary: Publish key packages for this device
+      description: >-
+        Adds key packages of the calling device to its pool. Each is made
+        for the conversation profile, in the cipher suite
+        `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`, with the device's
+        credential `user:<person>/device:<device>` and the signature key of
+        its record. A claim hands out each one-time key package once; the
+        last-resort key package is handed out when no one-time one is left,
+        and kept. A new last resort replaces the earlier one. Authorized as
+        `key_package.publish`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyPackagePublish"
+      responses:
+        "204":
+          description: The key packages are added.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: a key package does not parse, is not made for the
+            profile, or names another device or another key.
+            `unknown_field`: the body has a member this one does not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the
+            authorizer refused.
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: >-
+            `too_large`: the body is over the server's bound; it carries more
+            than 100 key packages; or the device would keep more than 200
+            one-time key packages.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+    get:
+      operationId: countKeyPackages
+      tags: [Key packages]
+      summary: Count the key packages this device has left
+      description: >-
+        Answers how many one-time key packages the calling device has left,
+        and whether it has a last resort, so it can publish more before it
+        runs out. Authorized as `key_package.publish`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceRequired"
+      responses:
+        "200":
+          description: The calling device's pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyPackageCount"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the
+            authorizer refused.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/key-packages/claim:
+    post:
+      operationId: claimKeyPackages
+      tags: [Key packages]
+      summary: Claim a key package of each of a person's devices
+      description: >-
+        Hands out one key package of each device of the person that stands,
+        to add them to a conversation the caller is one of the people of:
+        the device's oldest one-time key package, which is deleted, or its
+        last resort, which is kept. A device with neither is left out, so
+        the list may be shorter than the person's devices, or empty.
+        Authorized as `key_package.claim`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceOptional"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyPackageClaim"
+      responses:
+        "200":
+          description: The key packages handed out.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimedKeyPackages"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: the body is not JSON of this shape. `unknown_field`:
+            the body has a member this one does not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: >-
+            `not_found`: no conversation has this id, or the caller is not
+            one of its people.
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: "`too_large`: the body is over the server's bound."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/conversations:
+    post:
+      operationId: createConversation
+      tags: [Conversations]
+      summary: Create a conversation
+      description: >-
+        Creates a conversation from the group info of its group at epoch 0,
+        made by the calling device. The group's id is the bytes of the
+        conversation id, its one leaf is the calling device, its state names
+        the caller as the one person and owner with the assistant `off`, its
+        extensions are the profile's with this server as the one external
+        sender (see `getService`), and the group info carries the ratchet
+        tree and the external public key. Add people afterwards with
+        commits. Authorized as `conversation.create`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationCreate"
+      responses:
+        "201":
+          description: The conversation as created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: the id is not 1 to 128 of `A-Z`, `a-z`, `0-9`, `.`,
+            `_`, `~` and `-`, or the group info does not parse or breaks one
+            of the rules above; `details.detail` names which.
+            `unknown_field`: the body has a member this one does not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the
+            authorizer refused.
+        "409":
+          $ref: "#/components/responses/Exists"
+          description: "`exists`: the conversation id is taken."
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: "`too_large`: the body is over the server's bound."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+    get:
+      operationId: listConversations
+      tags: [Conversations]
+      summary: List your conversations
+      description: >-
+        Answers a page of the conversations the caller is one of the people
+        of, ordered by id. Pass the page's `next` as `after` to read the
+        next page. Authorized as `conversation.list`.
+      parameters:
+        - $ref: "#/components/parameters/ConversationsAfter"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/DeviceOptional"
+      responses:
+        "200":
+          description: A page of conversations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationList"
+        "400":
+          $ref: "#/components/responses/BadQuery"
+          description: "`invalid`: `limit` is not a number from 0 to 200."
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/conversations/{id}:
+    get:
+      operationId: getConversation
+      tags: [Conversations]
+      summary: Get a conversation
+      description: >-
+        Answers a conversation's kind, the assistant's level, its people and
+        owners, its epoch and the sequence number of its last message.
+        Authorized as `conversation.read`.
+      parameters:
+        - $ref: "#/components/parameters/Conversation"
+        - $ref: "#/components/parameters/DeviceOptional"
+      responses:
+        "200":
+          description: The conversation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: no conversation has this id."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/conversations/{id}/group-info:
+    get:
+      operationId: getGroupInfo
+      tags: [Conversations]
+      summary: Get a conversation's latest group info
+      description: >-
+        Answers the group info of the conversation's current epoch, with the
+        ratchet tree and the external public key, for a device of one of
+        the conversation's people to join from with an external commit.
+        Authorized as `conversation.read`.
+      parameters:
+        - $ref: "#/components/parameters/Conversation"
+        - $ref: "#/components/parameters/DeviceRequired"
+      responses:
+        "200":
+          description: The latest group info.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupInfo"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the caller
+            is not one of the conversation's people, or the authorizer
+            refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: no conversation has this id."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/conversations/{id}/messages:
+    post:
+      operationId: sendMessage
+      tags: [Messages]
+      summary: Send an MLS message to a conversation
+      description: >-
+        Appends one MLS message to the conversation's log with the next
+        sequence number. An application message is a PrivateMessage of the
+        group's current epoch from a device that is a leaf of the group.
+        A proposal or a commit is a PublicMessage of the current epoch from
+        the calling device's leaf, or from the leaf it joins with; the
+        server checks it against the group's public state and the
+        conversation's rules before it asks the authorizer. A commit
+        carries the group info of the epoch it starts, with the ratchet tree
+        and the external public key, and, when it adds a device, the
+        Welcome for every device it adds. The server files that Welcome for
+        each added device. Only one commit takes each epoch: when another
+        commit was accepted first, process it and commit again. Authorized
+        as `conversation.send` for an application message,
+        `conversation.leave` for a proposal that removes the sender's own
+        leaf, and `conversation.commit` for any other proposal and for a
+        commit.
+      parameters:
+        - $ref: "#/components/parameters/Conversation"
+        - $ref: "#/components/parameters/DeviceRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageSend"
+      responses:
+        "201":
+          description: Where the message was appended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageSent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: the message is not an MLS PublicMessage or
+            PrivateMessage of this conversation's group; it is of a later
+            epoch than the group's; a commit's group info does not describe
+            the epoch it starts or lacks the ratchet tree or the external
+            public key; a commit that adds a device carries no Welcome, or
+            one that is not for every device it adds; or a commit that adds
+            none carries one. `details.detail` names which.
+            `unknown_field`: the body has a member this one does not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the caller
+            is not one of the conversation's people; an application
+            message's device is not a leaf of the group; or the authorizer
+            refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: no conversation has this id."
+        "409":
+          $ref: "#/components/responses/EpochConflict"
+          description: >-
+            `epoch_taken`: a proposal or a commit is for an epoch that has
+            ended, because another commit was accepted first; or the
+            conversation kept changing while this one was checked.
+            `details.detail` names the current epoch. `wrong_epoch`: an
+            application message is for an epoch that has ended; fetch the
+            messages since and send it again in the current epoch.
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: >-
+            `too_large`: the body is over the server's bound, or the message
+            is empty or over 266240 bytes.
+        "422":
+          $ref: "#/components/responses/Refused"
+          description: >-
+            `refused`: the group's public state or the conversation's rules
+            refuse the message: it does not verify, its sender is not the
+            calling device, a proposal or a commit is encrypted, an
+            application message is not, or the change it makes is not
+            allowed.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+    get:
+      operationId: listMessages
+      tags: [Messages]
+      summary: Read a conversation's messages
+      description: >-
+        Answers the messages after a sequence number, oldest first, that
+        the calling device may read: those of the epochs it was a leaf in.
+        When there is none yet, the answer waits up to `wait` seconds for
+        one. Pass the answer's `next` as `after` to read on. Authorized as
+        `conversation.read`.
+      parameters:
+        - $ref: "#/components/parameters/Conversation"
+        - $ref: "#/components/parameters/MessagesAfter"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Wait"
+        - $ref: "#/components/parameters/DeviceRequired"
+      responses:
+        "200":
+          description: A page of the log.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageList"
+        "400":
+          $ref: "#/components/responses/BadQuery"
+          description: >-
+            `invalid`: `after`, `limit` or `wait` is not a number in its
+            range.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the
+            authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: no conversation has this id."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/welcomes:
+    get:
+      operationId: listWelcomes
+      tags: [Welcomes]
+      summary: List the Welcomes for this device
+      description: >-
+        Answers the Welcome messages filed for the calling device by the
+        commits that added it, oldest first, each with the commit's history
+        notice. Join each conversation from its Welcome, then delete the
+        Welcome. A conversation that no longer exists, or that the
+        authorizer does not let the caller read, is left out. Each conversation is authorized as
+        `conversation.read`.
+      parameters:
+        - $ref: "#/components/parameters/DeviceRequired"
+      responses:
+        "200":
+          description: The Welcomes for the calling device.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WelcomeList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/NotYourDevice"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/welcomes/{id}:
+    delete:
+      operationId: deleteWelcome
+      tags: [Welcomes]
+      summary: Delete a Welcome this device has joined with
+      description: >-
+        Deletes one of the calling device's Welcomes, once it has joined the
+        conversation. Not authorized beyond the token and the device.
+      parameters:
+        - $ref: "#/components/parameters/Welcome"
+        - $ref: "#/components/parameters/DeviceRequired"
+      responses:
+        "204":
+          description: The Welcome is deleted.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/NotYourDevice"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: the calling device has no Welcome with this id."
+        "500":
+          $ref: "#/components/responses/Internal"
+  /v1/messaging/conversations/{id}/people/{person}:
+    get:
+      operationId: getMembership
+      tags: [Conversations]
+      summary: Check whether a person is in a conversation
+      description: >-
+        Answers whether the person is one of the conversation's people now,
+        as a service that stores the files sent in a conversation asks
+        before it serves one. Authorized as `conversation.membership`.
+      parameters:
+        - $ref: "#/components/parameters/Conversation"
+        - $ref: "#/components/parameters/Person"
+        - $ref: "#/components/parameters/DeviceOptional"
+      responses:
+        "200":
+          description: Whether the person is one of the conversation's people.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header names no device of
+            the caller's that stands. `forbidden`: the authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: no conversation has this id."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        An access token from the OpenID Connect issuer the operator of the
+        server configures, addressed to the server's audience, `sermo`
+        unless the operator names another. Its `sub` claim is the caller's
+        person.
+  parameters:
+    Person:
+      name: person
+      in: path
+      required: true
+      description: The person, the `sub` claim of their token.
+      schema:
+        type: string
+    Device:
+      name: device
+      in: path
+      required: true
+      description: The id of one of the caller's devices.
+      schema:
+        type: string
+    Conversation:
+      name: id
+      in: path
+      required: true
+      description: The conversation's id.
+      schema:
+        type: string
+    Welcome:
+      name: id
+      in: path
+      required: true
+      description: The Welcome's id.
+      schema:
+        type: string
+    DeviceRequired:
+      name: Sermo-Device
+      in: header
+      required: true
+      description: >-
+        The id of the calling device: one of the caller's devices,
+        registered and not revoked.
+      schema:
+        type: string
+    DeviceOptional:
+      name: Sermo-Device
+      in: header
+      required: false
+      description: >-
+        The id of the calling device, when a device makes the request. When
+        present, it must be one of the caller's devices, registered and not
+        revoked.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: The most a page holds, 0 to 200; absent or 0 is 50.
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 200
+        default: 50
+    ConversationsAfter:
+      name: after
+      in: query
+      required: false
+      description: The `next` of the previous page; absent for the first.
+      schema:
+        type: string
+    MessagesAfter:
+      name: after
+      in: query
+      required: false
+      description: >-
+        The sequence number to read after: 0, or absent, for the start of
+        the log, and the `next` of the previous answer after that.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+        maximum: 4611686018427387904
+        default: 0
+    Wait:
+      name: wait
+      in: query
+      required: false
+      description: >-
+        How many seconds to wait for a message when there is none after
+        `after`, 0 to 30; absent or 0 answers at once.
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 30
+        default: 0
+  responses:
+    BadRequest:
+      description: "`invalid` or `unknown_field`: the request could not be read."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [invalid, unknown_field]
+    BadQuery:
+      description: "`invalid`: a query parameter is out of its range."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [invalid]
+    Unauthenticated:
+      description: >-
+        `missing_token`: the request carries no bearer token.
+        `invalid_token`: the token was refused, for example because it
+        expired, is addressed to another audience or is not from the
+        configured issuer; `details.detail` names why. Sign in again.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [missing_token, invalid_token]
+    Forbidden:
+      description: "`not_your_device` or `forbidden`."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [not_your_device, forbidden]
+    NotYourDevice:
+      description: "`not_your_device`."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [not_your_device]
+    NotFound:
+      description: "`not_found`."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [not_found]
+    Exists:
+      description: "`exists`."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [exists]
+    EpochConflict:
+      description: "`epoch_taken` or `wrong_epoch`."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [epoch_taken, wrong_epoch]
+    TooLarge:
+      description: "`too_large`."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [too_large]
+    Refused:
+      description: "`refused`."
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [refused]
+    Internal:
+      description: >-
+        `internal`: something failed on the server's side. The cause is in
+        the server's log and not in the answer. Try again.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [internal]
+    AuthorizerUnavailable:
+      description: >-
+        `authorizer_unavailable`: the operator's authorizer gave no answer,
+        so nothing was done. Try again shortly.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [authorizer_unavailable]
+  schemas:
+    Bytes:
+      type: string
+      format: byte
+      contentEncoding: base64
+      description: Bytes in standard base64 with `=` padding.
+    Error:
+      type: object
+      description: A refusal.
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        message:
+          type: string
+          description: >-
+            The one sentence for the code, the same for every refusal with
+            it, written for the person using your app.
+        details:
+          type: object
+          description: What was wrong with this request, for a developer; absent when there is nothing to add.
+          properties:
+            detail:
+              type: string
+              description: >-
+                The developer detail, such as the member that is wrong or
+                the epoch the conversation is at. Its wording may change;
+                branch on `code`.
+    ErrorCode:
+      type: string
+      description: >-
+        What went wrong, with the status it is answered with and the
+        sentence `message` carries.
+
+
+        - `invalid` (400), "The request could not be read.": the body,
+        a parameter or what it holds is not what the operation takes.
+
+        - `unknown_field` (400), "The request has a member this API does
+        not take.": the body has a member this document does not describe.
+
+        - `missing_token` (401), "This request needs a token.": no bearer
+        token.
+
+        - `invalid_token` (401), "The token was refused. Sign in again.":
+        the bearer token does not verify.
+
+        - `not_your_device` (403), "This device is not one of yours. Set it
+        up again.": the `Sermo-Device` header is missing where the
+        operation needs it, or names no device of the caller's that
+        stands.
+
+        - `forbidden` (403), "You can't do that here.": the authorizer
+        refused, or the caller may not do this in the conversation.
+
+        - `not_found` (404), "That isn't here.": the object is not there,
+        or not one the caller can see.
+
+        - `exists` (409), "That exists already.": the object is there
+        already, or its key is revoked.
+
+        - `epoch_taken` (409), "Someone else changed the conversation
+        first. Try again.": another commit took the epoch first.
+
+        - `wrong_epoch` (409), "The conversation has moved on. Catch up and
+        send again.": an application message is for an epoch that has
+        ended.
+
+        - `refused` (422), "The conversation's rules don't allow that
+        change.": the group's state or the conversation's rules refuse the
+        message.
+
+        - `too_large` (413), "That is too large to send.": the body, a
+        message or a count is over its bound, or a message is empty.
+
+        - `authorizer_unavailable` (503), "This can't be checked right now.
+        Try again shortly.": the authorizer gave no answer.
+
+        - `internal` (500), "Something went wrong on our side.": a failure
+        on the server's side.
+      enum:
+        - invalid
+        - unknown_field
+        - missing_token
+        - invalid_token
+        - not_your_device
+        - forbidden
+        - not_found
+        - exists
+        - epoch_taken
+        - wrong_epoch
+        - refused
+        - too_large
+        - authorizer_unavailable
+        - internal
+    Service:
+      type: object
+      required: [external_sender]
+      properties:
+        external_sender:
+          $ref: "#/components/schemas/ExternalSender"
+    ExternalSender:
+      type: object
+      description: >-
+        This server as an MLS external sender: the entry a conversation's
+        group names in its external senders extension.
+      required: [signature_key, identity]
+      properties:
+        signature_key:
+          $ref: "#/components/schemas/Bytes"
+          description: The server's Ed25519 signature public key.
+        identity:
+          type: string
+          description: The identity of the server's basic credential.
+    RecordKind:
+      type: string
+      description: >-
+        What a directory record holds: a device's keys, or the public key of
+        a person's recovery key.
+      enum: [device, recovery]
+    DeviceRecord:
+      type: object
+      description: >-
+        One record of a person's keys, vouched for by another record of the
+        same person, or by itself for a root, and signed by its own key.
+      required: [person, id, kind, signature_key, voucher, voucher_key, vouch, possession]
+      additionalProperties: false
+      properties:
+        person:
+          type: string
+          description: The person whose record it is.
+        id:
+          type: string
+          description: The device's id among the person's records, or the recovery record's.
+        kind:
+          $ref: "#/components/schemas/RecordKind"
+        signature_key:
+          $ref: "#/components/schemas/Bytes"
+          description: >-
+            The record's Ed25519 public key. A device's leaves carry it in
+            every group.
+        encryption_key:
+          $ref: "#/components/schemas/Bytes"
+          description: >-
+            A device's X25519 public key, which the person's other devices
+            seal the backup key to; absent on a recovery record.
+        voucher:
+          type: string
+          description: The id of the record whose key signed `vouch`; the record's own for a root.
+        voucher_key:
+          $ref: "#/components/schemas/Bytes"
+          description: The signature key of the voucher.
+        vouch:
+          $ref: "#/components/schemas/Bytes"
+          description: The voucher's signature of the record.
+        possession:
+          $ref: "#/components/schemas/Bytes"
+          description: The record's own key's signature of the record, voucher included.
+    Revocation:
+      type: object
+      description: >-
+        A revocation of one of a person's signature keys, signed by a record
+        of the same person under the same root.
+      required: [person, key, by, signature]
+      additionalProperties: false
+      properties:
+        person:
+          type: string
+          description: The person whose key it revokes.
+        key:
+          $ref: "#/components/schemas/Bytes"
+          description: The signature key revoked.
+        keep:
+          type: array
+          description: >-
+            The signature keys of the records the revoked key vouched for
+            that stay the person's; absent when none stays.
+          items:
+            $ref: "#/components/schemas/Bytes"
+        by:
+          type: string
+          description: The id of the record whose key signed it.
+        signature:
+          $ref: "#/components/schemas/Bytes"
+          description: The signature of `by`'s key.
+    DeviceList:
+      type: object
+      required: [records, revocations]
+      properties:
+        records:
+          type: array
+          description: Every record of the person, revoked ones included, by id.
+          items:
+            $ref: "#/components/schemas/DeviceRecord"
+        revocations:
+          type: array
+          description: Every revocation of the person's keys, in the order they were kept.
+          items:
+            $ref: "#/components/schemas/Revocation"
+    Recovery:
+      type: object
+      required: [record, wrapped]
+      additionalProperties: false
+      properties:
+        record:
+          $ref: "#/components/schemas/DeviceRecord"
+          description: The recovery record, of kind `recovery`.
+        wrapped:
+          $ref: "#/components/schemas/Bytes"
+          description: The backup key wrapped under the recovery key, 1 to 4096 bytes.
+    Transfer:
+      type: object
+      required: [sealed]
+      additionalProperties: false
+      properties:
+        sealed:
+          $ref: "#/components/schemas/Bytes"
+          description: The backup key sealed to the device, 1 to 4096 bytes.
+    KeyPackagePublish:
+      type: object
+      additionalProperties: false
+      properties:
+        key_packages:
+          type: array
+          description: One-time key packages, each an MLS KeyPackage, at most 100.
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/Bytes"
+        last_resort:
+          $ref: "#/components/schemas/Bytes"
+          description: >-
+            A last-resort key package, handed out when no one-time one is
+            left, and kept; it replaces the device's earlier one.
+    KeyPackageCount:
+      type: object
+      required: [count, last_resort]
+      properties:
+        count:
+          type: integer
+          minimum: 0
+          description: How many one-time key packages the device has left.
+        last_resort:
+          type: boolean
+          description: Whether the device has a last-resort key package.
+    KeyPackageClaim:
+      type: object
+      required: [person, conversation]
+      additionalProperties: false
+      properties:
+        person:
+          type: string
+          description: The person whose devices' key packages to claim.
+        conversation:
+          type: string
+          description: The id of the conversation they are claimed to add the person to.
+    ClaimedKeyPackage:
+      type: object
+      required: [device, key_package]
+      properties:
+        device:
+          type: string
+          description: The id of the device the key package is of.
+        key_package:
+          $ref: "#/components/schemas/Bytes"
+          description: The MLS KeyPackage.
+    ClaimedKeyPackages:
+      type: object
+      required: [key_packages]
+      properties:
+        key_packages:
+          type: array
+          description: One key package of each device that had one.
+          items:
+            $ref: "#/components/schemas/ClaimedKeyPackage"
+    ConversationKind:
+      type: string
+      description: >-
+        `one_on_one` is a conversation between two people, which never takes
+        a third: adding someone starts a group. `group` is a conversation of
+        any number of people.
+      enum: [one_on_one, group]
+    Level:
+      type: string
+      description: >-
+        How much the assistant takes part. `off` keeps it out of the group.
+        `reads_along` lets it read and answer whoever asked, and never post
+        to the group. `takes_part` lets it post its answers to the group
+        too.
+      enum: ["off", reads_along, takes_part]
+    ConversationCreate:
+      type: object
+      required: [id, group_info]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: The new conversation's id, 1 to 128 of `A-Z`, `a-z`, `0-9`, `.`, `_`, `~` and `-`.
+        group_info:
+          $ref: "#/components/schemas/Bytes"
+          description: >-
+            The MLS GroupInfo of the group at epoch 0, with the ratchet tree
+            and the external public key.
+    Conversation:
+      type: object
+      required: [id, kind, level, people, owners, epoch, seq, created, updated]
+      properties:
+        id:
+          type: string
+          description: The conversation's id, whose bytes are its group's id.
+        kind:
+          $ref: "#/components/schemas/ConversationKind"
+        level:
+          $ref: "#/components/schemas/Level"
+        people:
+          type: array
+          description: The conversation's people, in the order they joined.
+          items:
+            type: string
+        owners:
+          type: array
+          description: The people who own the conversation, in the order they became owners.
+          items:
+            type: string
+        epoch:
+          type: integer
+          minimum: 0
+          description: The group's current epoch.
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The sequence number of the last message of the log, 0 before the first.
+        created:
+          type: string
+          format: date-time
+          description: When the conversation was created.
+        updated:
+          type: string
+          format: date-time
+          description: When a message was last appended, or the conversation was created.
+    ConversationList:
+      type: object
+      required: [conversations]
+      properties:
+        conversations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Conversation"
+        next:
+          type: string
+          description: >-
+            The cursor of the next page, present when this page is full.
+            The next page may be empty.
+    GroupInfo:
+      type: object
+      required: [group_info]
+      properties:
+        group_info:
+          $ref: "#/components/schemas/Bytes"
+          description: >-
+            The MLS GroupInfo of the current epoch, with the ratchet tree
+            and the external public key.
+    MessageSend:
+      type: object
+      required: [message]
+      additionalProperties: false
+      properties:
+        message:
+          $ref: "#/components/schemas/Bytes"
+          description: The MLS message, 1 to 266240 bytes.
+        welcome:
+          $ref: "#/components/schemas/Bytes"
+          description: >-
+            For a commit that adds a device, the MLS Welcome for every
+            device it adds; absent otherwise.
+        group_info:
+          $ref: "#/components/schemas/Bytes"
+          description: >-
+            For a commit, the MLS GroupInfo of the epoch it starts, with the
+            ratchet tree and the external public key; absent otherwise.
+    MessageKind:
+      type: string
+      description: >-
+        `application` is a message people wrote, encrypted. `proposal` and
+        `commit` change the group.
+      enum: [application, proposal, commit]
+    MessageSent:
+      type: object
+      required: [seq, epoch, kind]
+      properties:
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The message's sequence number in the log.
+        epoch:
+          type: integer
+          minimum: 0
+          description: The epoch the message is of.
+        kind:
+          $ref: "#/components/schemas/MessageKind"
+    Message:
+      type: object
+      required: [seq, epoch, kind, message, created]
+      properties:
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The message's sequence number in the log.
+        epoch:
+          type: integer
+          minimum: 0
+          description: The epoch the message is of.
+        kind:
+          $ref: "#/components/schemas/MessageKind"
+        message:
+          $ref: "#/components/schemas/Bytes"
+          description: The MLS message as it was sent.
+        person:
+          type: string
+          description: The person whose token sent it; absent on the server's own proposal.
+        device:
+          type: string
+          description: The device that sent it; absent on the server's own proposal.
+        created:
+          type: string
+          format: date-time
+          description: When the server appended it.
+    MessageList:
+      type: object
+      required: [messages, next]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        next:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            The sequence number to read after next time: the last one this
+            answer passed, including messages of epochs the device may not
+            read, or `after` itself when there were none.
+    Welcome:
+      type: object
+      required: [id, conversation, seq, welcome, created]
+      properties:
+        id:
+          type: string
+          description: The Welcome's id, to delete it by.
+        conversation:
+          type: string
+          description: The conversation the Welcome joins.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The sequence number of the commit that added the device.
+        welcome:
+          $ref: "#/components/schemas/Bytes"
+          description: The MLS Welcome.
+        notice:
+          $ref: "#/components/schemas/Bytes"
+          description: The commit's authenticated data, its history notice; absent when it had none.
+        created:
+          type: string
+          format: date-time
+          description: When the Welcome was filed.
+    WelcomeList:
+      type: object
+      required: [welcomes]
+      properties:
+        welcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Welcome"
+    Membership:
+      type: object
+      required: [person, member]
+      properties:
+        person:
+          type: string
+          description: The person asked about.
+        member:
+          type: boolean
+          description: Whether the person is one of the conversation's people now.
