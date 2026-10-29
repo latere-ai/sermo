@@ -236,6 +236,9 @@ func (s *Store) Conversation(_ context.Context, id string) (store.Conversation, 
 
 // Conversations lists a person's conversations by id.
 func (s *Store) Conversations(_ context.Context, person, after string, limit int) ([]store.Conversation, error) {
+	if limit < 1 {
+		return nil, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []store.Conversation
@@ -291,6 +294,9 @@ func (s *Store) Messages(_ context.Context, id string, after int64, limit int) (
 	defer s.mu.Unlock()
 	if _, ok := s.convs[id]; !ok {
 		return nil, store.ErrNotFound
+	}
+	if limit < 1 {
+		return nil, nil
 	}
 	var out []store.Message
 	for _, m := range s.log[id] {

@@ -56,6 +56,7 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		{"AppendConflict", testAppendConflict},
 		{"AppendRace", testAppendRace},
 		{"Messages", testMessages},
+		{"Limits", testLimits},
 		{"Welcomes", testWelcomes},
 		{"DeleteMessagesBefore", testDeleteMessagesBefore},
 		{"Spans", testSpans},
@@ -593,6 +594,28 @@ func testMessages(t *testing.T, s store.Store) {
 
 	_, err = s.Messages(ctx, "c03", 0, 10)
 	is(t, err, store.ErrNotFound, "Messages of a conversation that does not exist")
+}
+
+// testLimits checks that a list asked for fewer than one entry lists
+// none, rather than all of them or a failure, and that a conversation
+// that does not exist is still not found.
+func testLimits(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	must(t, s.CreateConversation(ctx, conversation("c01", "person-a")), "CreateConversation")
+	for i := range 2 {
+		_, err := s.Append(ctx, "c01", 0, store.Append{Message: msg(store.KindApplication, 0, "person-a", "dev-a", strconv.Itoa(i))})
+		must(t, err, "Append")
+	}
+	for _, limit := range []int{0, -1} {
+		cs, err := s.Conversations(ctx, "person-a", "", limit)
+		must(t, err, "Conversations")
+		checkf(t, len(cs) == 0, "Conversations(limit %d) = %v, want none", limit, each(cs, conversationID))
+		msgs, err := s.Messages(ctx, "c01", 0, limit)
+		must(t, err, "Messages")
+		checkf(t, len(msgs) == 0, "Messages(limit %d) = %v, want none", limit, each(msgs, seqOf))
+		_, err = s.Messages(ctx, "c02", 0, limit)
+		is(t, err, store.ErrNotFound, "Messages of a conversation that does not exist, limit "+strconv.Itoa(limit))
+	}
 }
 
 // testWelcomes checks that welcomes list per device, oldest first,

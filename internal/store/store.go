@@ -74,7 +74,8 @@ type Store interface {
 	// Conversation reads one conversation.
 	Conversation(ctx context.Context, id string) (Conversation, error)
 	// Conversations lists the conversations a person is one of the
-	// people of, by id, after the id after.
+	// people of, by id, after the id after: at most limit of them, and
+	// none when limit is below one.
 	Conversations(ctx context.Context, person, after string, limit int) ([]Conversation, error)
 	// Append appends a message to a conversation read at version, in one
 	// transaction: the message takes the next sequence number, and the
@@ -83,7 +84,8 @@ type Store interface {
 	// version is no longer the one read.
 	Append(ctx context.Context, id string, version int64, a Append) (Message, error)
 	// Messages lists a conversation's messages after a sequence number,
-	// oldest first.
+	// oldest first: at most limit of them, and none when limit is below
+	// one.
 	Messages(ctx context.Context, id string, after int64, limit int) ([]Message, error)
 	// Welcomes lists the welcomes filed for a device, oldest first.
 	Welcomes(ctx context.Context, person, device string) ([]Welcome, error)
