@@ -318,7 +318,7 @@ func commitFields(ch *messaging.Change) map[string]any {
 	if len(removed) > 0 {
 		changes = append(changes, authorizer.ChangeRemovePeople)
 	}
-	if !slicesEqual(ch.Before.Owners, ch.After.Owners) {
+	if !slices.Equal(ch.Before.Owners, ch.After.Owners) {
 		changes = append(changes, authorizer.ChangeOwners)
 	}
 	if ch.Before.Level != ch.After.Level {
@@ -335,18 +335,6 @@ func commitFields(ch *messaging.Change) map[string]any {
 		authorizer.FieldNewOwners:    nonNil(ch.After.Owners),
 		authorizer.FieldNewLevel:     string(level),
 	}
-}
-
-func slicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func nonNil(v []string) []string {
