@@ -482,6 +482,11 @@ func (a *API) list(ctx context.Context, w conv.Who, r *http.Request) (int, any, 
 	if err != nil {
 		return 0, nil, err
 	}
+	if limit == 0 {
+		// A limit of 0 is the default page, which the next cursor below
+		// must know to name the page after a full one.
+		limit = conv.DefaultListLimit
+	}
 	cs, err := a.svc.List(ctx, w, r.URL.Query().Get("after"), int(limit))
 	if err != nil {
 		return 0, nil, err
@@ -490,7 +495,7 @@ func (a *API) list(ctx context.Context, w conv.Who, r *http.Request) (int, any, 
 	for i := range cs {
 		out.Conversations = append(out.Conversations, conversationOf(&cs[i]))
 	}
-	if int64(len(cs)) == limit && limit > 0 {
+	if int64(len(cs)) == limit {
 		out.Next = cs[len(cs)-1].ID
 	}
 	return http.StatusOK, out, nil

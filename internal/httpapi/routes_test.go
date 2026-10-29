@@ -595,3 +595,26 @@ func leafOf(t *testing.T, g *mls.Group, id messaging.Identity) uint32 {
 	t.Fatalf("%s has no leaf", id)
 	return 0
 }
+
+// A list asked for with a limit of 0 pages as the default page does, so
+// a client paging that way reaches every conversation.
+func TestListPagesAtTheDefaultLimit(t *testing.T) {
+	e := newEnv(t)
+	alice := e.newDevice("alice", "phone")
+	external := service(t, e)
+	for range conv.DefaultListLimit + 1 {
+		create(t, alice, external)
+	}
+	for _, q := range []string{"", "?limit=0"} {
+		var first httpapi.ConversationList
+		e.must(alice.call("GET", "/conversations"+q, nil, &first), http.StatusOK, "list "+q)
+		if len(first.Conversations) != conv.DefaultListLimit || first.Next == "" {
+			t.Fatalf("list %q: %d conversations, next %q", q, len(first.Conversations), first.Next)
+		}
+		var rest httpapi.ConversationList
+		e.must(alice.call("GET", "/conversations?after="+first.Next+strings.Replace(q, "?", "&", 1), nil, &rest), http.StatusOK, "the next page "+q)
+		if len(rest.Conversations) != 1 || rest.Next != "" {
+			t.Fatalf("the page after, %q: %d conversations, next %q", q, len(rest.Conversations), rest.Next)
+		}
+	}
+}
