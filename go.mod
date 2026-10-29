@@ -7,6 +7,7 @@ toolchain go1.27.2
 tool latere.ai/x/ci-gate/cmd/lateregate
 
 require (
+	github.com/goccy/go-yaml v1.19.2
 	latere.ai/x/pkg v0.110.1
 	latere.ai/x/sdk-go v0.14.1-0.20261029221209-ef36fca60fad
 )
@@ -17,7 +18,6 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

@@ -146,6 +146,7 @@ func (e *env) call(method, path, token, device string, in, out any) answer {
 	e.mu.Lock()
 	e.seen.Write(b)
 	e.mu.Unlock()
+	holdToDocument(e.t, method, path, resp.StatusCode, b)
 	a := answer{status: resp.StatusCode}
 	if resp.StatusCode >= 400 {
 		var env struct {
