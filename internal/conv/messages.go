@@ -40,8 +40,11 @@ type Sent struct {
 // Send checks a message against the group's public state and the rules,
 // asks the authorizer, and appends it, one commit per epoch.
 func (s *Service) Send(ctx context.Context, w Who, id string, in Send) (*Sent, error) {
-	if len(in.Message) == 0 || len(in.Message) > MaxMessageBytes {
-		return nil, apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a message is 1 to %d bytes", MaxMessageBytes))
+	if len(in.Message) == 0 {
+		return nil, apierr.New(apierr.CodeInvalid, "the message is empty")
+	}
+	if len(in.Message) > MaxMessageBytes {
+		return nil, apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a message is at most %d bytes", MaxMessageBytes))
 	}
 	info, err := mls.PeekMessage(in.Message)
 	if err != nil {

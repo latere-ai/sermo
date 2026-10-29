@@ -111,7 +111,7 @@ func TestSendRefusals(t *testing.T) {
 		body httpapi.SendBody
 		code string
 	}{
-		"nothing":                 {alice, httpapi.SendBody{}, "too_large"},
+		"nothing":                 {alice, httpapi.SendBody{}, "invalid"},
 		"not a message":           {alice, httpapi.SendBody{Message: []byte("not a message")}, "invalid"},
 		"another group's":         {alice, httpapi.SendBody{Message: carolsMessage}, "invalid"},
 		"from a device not in it": {tablet, httpapi.SendBody{Message: alice.seal("as the tablet")}, "forbidden"},

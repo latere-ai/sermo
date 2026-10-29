@@ -728,8 +728,8 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
           description: >-
-            `invalid`: the message is not an MLS PublicMessage or
-            PrivateMessage of this conversation's group; it is of a later
+            `invalid`: the message is empty, or is not an MLS PublicMessage
+            or PrivateMessage of this conversation's group; it is of a later
             epoch than the group's; a commit's group info does not describe
             the epoch it starts or lacks the ratchet tree or the external
             public key; a commit that adds a device carries no Welcome, or
@@ -762,7 +762,7 @@ paths:
           $ref: "#/components/responses/TooLarge"
           description: >-
             `too_large`: the body is over the server's bound, or the message
-            is empty or over 266240 bytes.
+            is over 266240 bytes.
         "422":
           $ref: "#/components/responses/Refused"
           description: >-
@@ -1243,7 +1243,7 @@ components:
         message.
 
         - `too_large` (413), "That is too large to send.": the body, a
-        message or a count is over its bound, or a message is empty.
+        message or a count is over its bound.
 
         - `authorizer_unavailable` (503), "This can't be checked right now.
         Try again shortly.": the authorizer gave no answer.
