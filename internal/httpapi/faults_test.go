@@ -66,11 +66,11 @@ func (f *faults) tick() error {
 	return nil
 }
 
-func (f *faults) PutDevice(ctx context.Context, r messaging.DeviceRecord) error {
+func (f *faults) PutDevice(ctx context.Context, r messaging.DeviceRecord, check store.DirectoryCheck) error {
 	if err := f.tick(); err != nil {
 		return err
 	}
-	return f.inner.PutDevice(ctx, r)
+	return f.inner.PutDevice(ctx, r, check)
 }
 
 func (f *faults) Devices(ctx context.Context, person string) ([]messaging.DeviceRecord, error) {
@@ -80,11 +80,11 @@ func (f *faults) Devices(ctx context.Context, person string) ([]messaging.Device
 	return f.inner.Devices(ctx, person)
 }
 
-func (f *faults) AddRevocation(ctx context.Context, v messaging.Revocation, device string) error {
+func (f *faults) AddRevocation(ctx context.Context, v messaging.Revocation, device string, check store.DirectoryCheck) error {
 	if err := f.tick(); err != nil {
 		return err
 	}
-	return f.inner.AddRevocation(ctx, v, device)
+	return f.inner.AddRevocation(ctx, v, device, check)
 }
 
 func (f *faults) Revocations(ctx context.Context, person string) ([]messaging.Revocation, error) {

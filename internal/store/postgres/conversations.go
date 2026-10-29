@@ -149,7 +149,7 @@ func (s *Store) Conversations(ctx context.Context, person, after string, limit i
 	if limit < 1 {
 		return nil, nil
 	}
-	out, err := list(ctx, s, listConversations, []any{person, after, limit}, func(row pgx.CollectableRow) (store.Conversation, error) {
+	out, err := list(ctx, s.pool, listConversations, []any{person, after, limit}, func(row pgx.CollectableRow) (store.Conversation, error) {
 		return scanConversation(row)
 	})
 	if err != nil {
@@ -216,7 +216,7 @@ func (s *Store) Messages(ctx context.Context, id string, after int64, limit int)
 	var out []store.Message
 	if limit >= 1 {
 		var err error
-		out, err = list(ctx, s, listMessages, []any{id, after, limit}, func(row pgx.CollectableRow) (store.Message, error) {
+		out, err = list(ctx, s.pool, listMessages, []any{id, after, limit}, func(row pgx.CollectableRow) (store.Message, error) {
 			var m store.Message
 			err := row.Scan(&m.Conversation, &m.Seq, &m.Epoch, &m.Kind, &m.Data, &m.Person, &m.Device, &m.Created)
 			return m, err
@@ -242,7 +242,7 @@ func (s *Store) Messages(ctx context.Context, id string, after int64, limit int)
 
 // Welcomes lists a device's welcomes in the order they were filed.
 func (s *Store) Welcomes(ctx context.Context, person, device string) ([]store.Welcome, error) {
-	out, err := list(ctx, s, listWelcomes, []any{person, device}, func(row pgx.CollectableRow) (store.Welcome, error) {
+	out, err := list(ctx, s.pool, listWelcomes, []any{person, device}, func(row pgx.CollectableRow) (store.Welcome, error) {
 		var w store.Welcome
 		err := row.Scan(&w.ID, &w.Person, &w.Device, &w.Conversation, &w.Seq, &w.Data, &w.Notice, &w.Created)
 		return w, err

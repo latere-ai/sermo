@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +57,89 @@ func (e *env) vouched(voucher *device, name string) *device {
 		kps: map[string]keyPackage{}}
 	e.must(e.call("PUT", "/devices/"+name, d.token, "", rec, nil), http.StatusNoContent, "register "+name)
 	return d
+}
+
+// Records registered at once under one new id with different keys, each
+// vouched for by the person's phone, leave one of them: the rest are
+// refused as an id registered with other keys, rather than each passing
+// its check on the same directory and the last write winning.
+func TestRegistrationsOfOneIDAtOnce(t *testing.T) {
+	e := newEnv(t)
+	phone := e.newDevice("alice", "phone")
+	const racers = 8
+	records := make([]messaging.DeviceRecord, racers)
+	for i := range records {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		enc, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec, err := messaging.NewDeviceRecord("alice", "tablet", key, enc.PublicKey(), &phone.record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rec.Sign(phone.key); err != nil {
+			t.Fatal(err)
+		}
+		records[i] = rec
+	}
+	answers := make([]answer, racers)
+	var wg sync.WaitGroup
+	for i, rec := range records {
+		wg.Go(func() { answers[i] = e.call("PUT", "/devices/tablet", phone.token, "", rec, nil) })
+	}
+	wg.Wait()
+	won, refused := -1, 0
+	for i, a := range answers {
+		switch {
+		case a.status == http.StatusNoContent:
+			won = i
+		case a.code == "exists":
+			refused++
+		}
+	}
+	if won < 0 || refused != racers-1 {
+		t.Fatalf("%d of %d registrations of one id were refused, want all but one: %+v", refused, racers, answers)
+	}
+	var list httpapi.DeviceList
+	e.must(phone.call("GET", "/people/alice/devices", nil, &list), http.StatusOK, "list")
+	tablets := 0
+	for _, r := range list.Records {
+		if r.ID == "tablet" {
+			tablets++
+			if !bytes.Equal(r.SignatureKey, records[won].SignatureKey) {
+				t.Error("the tablet's record is not the registration that was answered 204")
+			}
+		}
+	}
+	if tablets != 1 {
+		t.Errorf("alice has %d records named tablet, want 1", tablets)
+	}
+}
+
+// A record registered again with the same keys, voucher and vouch is
+// answered as registered and left as it is: what else it carries, a
+// proof of possession no check looked at, does not replace the record
+// the directory verified.
+func TestRegisteredAgainIsLeftAsItIs(t *testing.T) {
+	e := newEnv(t)
+	phone := e.newDevice("alice", "phone")
+	tablet := e.vouched(phone, "tablet")
+	again := tablet.record
+	again.Possession = bytes.Clone(again.Possession)
+	again.Possession[0] ^= 0xff
+	e.must(phone.call("PUT", "/devices/tablet", again, nil), http.StatusNoContent, "register again with another possession")
+	var list httpapi.DeviceList
+	e.must(phone.call("GET", "/people/alice/devices", nil, &list), http.StatusOK, "list")
+	for _, r := range list.Records {
+		if r.ID == "tablet" && !bytes.Equal(r.Possession, tablet.record.Possession) {
+			t.Error("registering again replaced the tablet's record with one whose possession no check looked at")
+		}
+	}
+	e.must(tablet.call("GET", "/key-packages", nil, nil), http.StatusOK, "the tablet still stands")
 }
 
 // A person's second device is approved by the first, takes the backup

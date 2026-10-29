@@ -229,6 +229,13 @@ paths:
           description: >-
             `not_your_device`: the `Sermo-Device` header names no device of
             the caller's that stands. `forbidden`: the authorizer refused.
+        "409":
+          $ref: "#/components/responses/Exists"
+          description: >-
+            `exists`: another of the caller's records took the revoked key
+            while the request was answered, so the authorizer was asked
+            about a device that no longer holds it. Nothing is kept; send
+            the revocation again.
         "413":
           $ref: "#/components/responses/TooLarge"
           description: >-

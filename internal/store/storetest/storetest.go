@@ -43,6 +43,10 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		{"Devices", testDevices},
 		{"Revocations", testRevocations},
 		{"RevocationDeletesKeys", testRevocationDeletesKeys},
+		{"DirectoryCheck", testDirectoryCheck},
+		{"DirectoryPutRace", testDirectoryPutRace},
+		{"DirectoryRevocationRace", testDirectoryRevocationRace},
+		{"DirectoryWritesOfBothKinds", testDirectoryWritesOfBothKinds},
 		{"Recovery", testRecovery},
 		{"Transfer", testTransfer},
 		{"TransferTakenOnce", testTransferTakenOnce},
@@ -81,7 +85,7 @@ func testDevices(t *testing.T, s store.Store) {
 	rec := recovery("person-a", "rec-1", a)
 	other := device("person-b", "dev-a")
 	for _, r := range []messaging.DeviceRecord{c, rec, a, other, b} {
-		must(t, s.PutDevice(ctx, r), "PutDevice "+r.Person+"/"+r.ID)
+		must(t, s.PutDevice(ctx, r, nil), "PutDevice "+r.Person+"/"+r.ID)
 	}
 	got, err = s.Devices(ctx, "person-a")
 	must(t, err, "Devices")
@@ -89,7 +93,7 @@ func testDevices(t *testing.T, s store.Store) {
 		"Devices = %v, want dev-a, dev-b, dev-c and rec-1 as they were put, by id", each(got, recordID))
 
 	b.EncryptionKey = fake("rotated encryption key", "person-a", "dev-b")
-	must(t, s.PutDevice(ctx, b), "PutDevice of an id the person has")
+	must(t, s.PutDevice(ctx, b, nil), "PutDevice of an id the person has")
 	got, err = s.Devices(ctx, "person-a")
 	must(t, err, "Devices")
 	checkf(t, slices.EqualFunc(got, []messaging.DeviceRecord{a, b, c, rec}, sameRecord),
@@ -111,7 +115,7 @@ func testRevocations(t *testing.T, s store.Store) {
 
 	first, second := revocation("person-a", "dev-c"), revocation("person-a", "dev-b", "dev-d", "dev-e")
 	for _, v := range []messaging.Revocation{first, second, first, revocation("person-b", "dev-a"), second} {
-		must(t, s.AddRevocation(ctx, v, ""), "AddRevocation by "+v.Person+"/"+v.By)
+		must(t, s.AddRevocation(ctx, v, "", nil), "AddRevocation by "+v.Person+"/"+v.By)
 	}
 	got, err = s.Revocations(ctx, "person-a")
 	must(t, err, "Revocations")
@@ -131,19 +135,19 @@ func testRevocationDeletesKeys(t *testing.T, s store.Store) {
 	for _, d := range [][2]string{{"person-a", "dev-b"}, {"person-a", "dev-c"}, {"person-b", "dev-b"}} {
 		publish(t, s, d[0], d[1])
 	}
-	must(t, s.AddRevocation(ctx, revocation("person-a", "dev-b"), "dev-b"), "AddRevocation of dev-b")
+	must(t, s.AddRevocation(ctx, revocation("person-a", "dev-b"), "dev-b", nil), "AddRevocation of dev-b")
 	gone(t, s, "person-a", "dev-b")
 	count(t, s, "person-a", "dev-c", 2, true)
 	count(t, s, "person-b", "dev-b", 2, true)
 
-	must(t, s.AddRevocation(ctx, revocation("person-a", "rec-1"), ""), "AddRevocation that names no device")
+	must(t, s.AddRevocation(ctx, revocation("person-a", "rec-1"), "", nil), "AddRevocation that names no device")
 	count(t, s, "person-a", "dev-c", 2, true)
 	count(t, s, "person-b", "dev-b", 2, true)
 
 	// Added again, the revocation is kept once and still deletes what the
 	// device published since.
 	publish(t, s, "person-a", "dev-b")
-	must(t, s.AddRevocation(ctx, revocation("person-a", "dev-b"), "dev-b"), "AddRevocation of dev-b again")
+	must(t, s.AddRevocation(ctx, revocation("person-a", "dev-b"), "dev-b", nil), "AddRevocation of dev-b again")
 	gone(t, s, "person-a", "dev-b")
 	got, err := s.Revocations(ctx, "person-a")
 	must(t, err, "Revocations")
@@ -155,6 +159,164 @@ func testRevocationDeletesKeys(t *testing.T, s store.Store) {
 		must(t, err, "TakeTransfer of "+d[0]+"/"+d[1]+", which no revocation named")
 		checkf(t, bytes.Equal(sealed, fake("sealed backup key", d[0], d[1])), "TakeTransfer of %s/%s = %q", d[0], d[1], sealed)
 	}
+}
+
+// errRefused is a directory check's refusal, which the write returns as
+// it is.
+var errRefused = errors.New("storetest: the check refused the write")
+
+// testDirectoryCheck checks that a directory write's check is given the
+// person's records and revocations, and decides the write: true writes,
+// false writes nothing, and an error writes nothing and is the write's,
+// unchanged. What check is given is its own to change.
+func testDirectoryCheck(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	a, b := device("person-a", "dev-a"), device("person-a", "dev-b")
+	first := revocation("person-a", "dev-c")
+	must(t, s.PutDevice(ctx, a, nil), "PutDevice with no check")
+	must(t, s.AddRevocation(ctx, first, "", nil), "AddRevocation with no check")
+	must(t, s.PutDevice(ctx, device("person-b", "dev-a"), nil), "PutDevice of another person")
+	publish(t, s, "person-a", "dev-b")
+
+	var seen [][]string
+	look := func(write bool, err error) store.DirectoryCheck {
+		return func(records []messaging.DeviceRecord, revocations []messaging.Revocation) (bool, error) {
+			seen = append(seen, append(each(records, recordID), each(revocations, revokedBy)...))
+			for i := range records {
+				clear(records[i].SignatureKey)
+			}
+			for i := range revocations {
+				clear(revocations[i].Signature)
+			}
+			return write, err
+		}
+	}
+	must(t, s.PutDevice(ctx, b, look(true, nil)), "PutDevice its check allows")
+	checkf(t, slices.Equal(seen[len(seen)-1], []string{"dev-a", "dev-c"}), "the check of a PutDevice saw %v, want person-a's record dev-a and revocation by dev-c", seen[len(seen)-1])
+	err := s.PutDevice(ctx, device("person-a", "dev-d"), look(false, errRefused))
+	checkf(t, errors.Is(err, errRefused) && err.Error() == errRefused.Error(), "PutDevice its check refuses: err = %v, want the check's, unchanged", err)
+	checkf(t, slices.Equal(seen[len(seen)-1], []string{"dev-a", "dev-b", "dev-c"}), "the check of a PutDevice after another saw %v, want dev-a, dev-b and the revocation by dev-c", seen[len(seen)-1])
+	must(t, s.PutDevice(ctx, device("person-a", "dev-e"), look(false, nil)), "PutDevice its check passes over")
+	got, err := s.Devices(ctx, "person-a")
+	must(t, err, "Devices")
+	checkf(t, slices.EqualFunc(got, []messaging.DeviceRecord{a, b}, sameRecord),
+		"Devices = %v, want dev-a and dev-b as they were put, and nothing a check refused or passed over", each(got, recordID))
+
+	second := revocation("person-a", "dev-b")
+	err = s.AddRevocation(ctx, second, "dev-b", look(false, errRefused))
+	checkf(t, errors.Is(err, errRefused) && err.Error() == errRefused.Error(), "AddRevocation its check refuses: err = %v, want the check's, unchanged", err)
+	must(t, s.AddRevocation(ctx, second, "dev-b", look(false, nil)), "AddRevocation its check passes over")
+	count(t, s, "person-a", "dev-b", 2, true)
+	must(t, s.AddRevocation(ctx, second, "dev-b", look(true, nil)), "AddRevocation its check allows")
+	gone(t, s, "person-a", "dev-b")
+	vs, err := s.Revocations(ctx, "person-a")
+	must(t, err, "Revocations")
+	checkf(t, slices.EqualFunc(vs, []messaging.Revocation{first, second}, sameRevocation),
+		"Revocations = %v, want dev-c's and then dev-b's, kept once its check allowed it", each(vs, revokedBy))
+}
+
+// testDirectoryPutRace checks that of records put at once under one new
+// id, each with a check that refuses an id already listed, exactly one is
+// written: no check reads the directory another write is deciding from.
+func testDirectoryPutRace(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		r := device("person-a", "dev-x")
+		r.SignatureKey = fake("signature key", "person-a", "dev-x", strconv.Itoa(i))
+		wg.Go(func() {
+			errs[i] = s.PutDevice(ctx, r, func(records []messaging.DeviceRecord, _ []messaging.Revocation) (bool, error) {
+				if slices.ContainsFunc(records, func(o messaging.DeviceRecord) bool { return o.ID == r.ID }) {
+					return false, errRefused
+				}
+				// A check that takes a moment, as one that verifies
+				// signatures does, gives a write that did not wait for it
+				// the time to land.
+				time.Sleep(5 * time.Millisecond)
+				return true, nil
+			})
+		})
+	}
+	wg.Wait()
+	won, refused := -1, 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			won = i
+		case errors.Is(err, errRefused):
+			refused++
+		}
+	}
+	requiref(t, won >= 0 && refused == racers-1, "%d of %d puts of one new id were refused, want all but one: %v", refused, racers, errs)
+	got, err := s.Devices(ctx, "person-a")
+	must(t, err, "Devices")
+	checkf(t, len(got) == 1 && bytes.Equal(got[0].SignatureKey, fake("signature key", "person-a", "dev-x", strconv.Itoa(won))),
+		"Devices after the race = %v, want the one put that was not refused", each(got, recordID))
+}
+
+// testDirectoryRevocationRace checks that of revocations added at once,
+// each with a check that holds a person to one revocation, exactly one is
+// kept.
+func testDirectoryRevocationRace(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		v := revocation("person-a", "dev-"+strconv.Itoa(i))
+		wg.Go(func() {
+			errs[i] = s.AddRevocation(ctx, v, "", func(_ []messaging.DeviceRecord, revocations []messaging.Revocation) (bool, error) {
+				if len(revocations) >= 1 {
+					return false, errRefused
+				}
+				time.Sleep(5 * time.Millisecond)
+				return true, nil
+			})
+		})
+	}
+	wg.Wait()
+	kept := 0
+	for _, err := range errs {
+		if err == nil {
+			kept++
+		}
+	}
+	got, err := s.Revocations(ctx, "person-a")
+	must(t, err, "Revocations")
+	checkf(t, kept == 1 && len(got) == 1, "%d of %d revocations bound to one were kept, and the person has %v, want one: %v", kept, racers, each(got, revokedBy), errs)
+}
+
+// testDirectoryWritesOfBothKinds checks that a record put and a
+// revocation added at once for one person decide one after the other: a
+// check that allows one write to a person's whole directory lets one of
+// them through.
+func testDirectoryWritesOfBothKinds(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	once := func(records []messaging.DeviceRecord, revocations []messaging.Revocation) (bool, error) {
+		if len(records)+len(revocations) >= 1 {
+			return false, errRefused
+		}
+		time.Sleep(5 * time.Millisecond)
+		return true, nil
+	}
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		id := "dev-" + strconv.Itoa(i)
+		wg.Go(func() {
+			if i%2 == 0 {
+				errs[i] = s.PutDevice(ctx, device("person-a", id), once)
+			} else {
+				errs[i] = s.AddRevocation(ctx, revocation("person-a", id), "", once)
+			}
+		})
+	}
+	wg.Wait()
+	rs, err := s.Devices(ctx, "person-a")
+	must(t, err, "Devices")
+	vs, err := s.Revocations(ctx, "person-a")
+	must(t, err, "Revocations")
+	checkf(t, len(rs)+len(vs) == 1, "records %v and revocations %v were written, want one write of either: %v", each(rs, recordID), each(vs, revokedBy), errs)
 }
 
 // testRecovery checks that a wrapped backup key is kept per person and
@@ -808,7 +970,7 @@ func testSpans(t *testing.T, s store.Store) {
 func testCopies(t *testing.T, s store.Store) {
 	ctx := t.Context()
 	r := device("person-a", "dev-a")
-	must(t, s.PutDevice(ctx, r), "PutDevice")
+	must(t, s.PutDevice(ctx, r, nil), "PutDevice")
 	clear(r.SignatureKey)
 	clear(r.EncryptionKey)
 	clear(r.Vouch)
@@ -822,7 +984,7 @@ func testCopies(t *testing.T, s store.Store) {
 	checkf(t, slices.EqualFunc(rs, []messaging.DeviceRecord{device("person-a", "dev-a")}, sameRecord), "a record changed with a copy handed in or read out")
 
 	v := revocation("person-a", "dev-b", "dev-c")
-	must(t, s.AddRevocation(ctx, v, ""), "AddRevocation")
+	must(t, s.AddRevocation(ctx, v, "", nil), "AddRevocation")
 	clear(v.Key)
 	clear(v.Keep[0])
 	vs, err := s.Revocations(ctx, "person-a")

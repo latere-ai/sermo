@@ -75,10 +75,43 @@ func cloneConversation(c *store.Conversation) store.Conversation {
 	return out
 }
 
-// PutDevice adds or replaces a record.
-func (s *Store) PutDevice(_ context.Context, r messaging.DeviceRecord) error {
+// decide runs a directory write's check over copies of the person's
+// directory. The caller holds s.mu, which no other write of the
+// directory takes while check runs.
+func (s *Store) decide(person string, check store.DirectoryCheck) (bool, error) {
+	if check == nil {
+		return true, nil
+	}
+	return check(s.records(person), s.revocations(person))
+}
+
+// records is copies of a person's records, by id. The caller holds s.mu.
+func (s *Store) records(person string) []messaging.DeviceRecord {
+	out := make([]messaging.DeviceRecord, 0, len(s.devices[person]))
+	for _, r := range s.devices[person] {
+		out = append(out, cloneRecord(r))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// revocations is copies of a person's revocations, in the order they
+// came. The caller holds s.mu.
+func (s *Store) revocations(person string) []messaging.Revocation {
+	out := make([]messaging.Revocation, len(s.revoked[person]))
+	for i, v := range s.revoked[person] {
+		out[i] = cloneRevocation(v)
+	}
+	return out
+}
+
+// PutDevice adds or replaces a record when check says to.
+func (s *Store) PutDevice(_ context.Context, r messaging.DeviceRecord, check store.DirectoryCheck) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if write, err := s.decide(r.Person, check); err != nil || !write {
+		return err
+	}
 	if s.devices[r.Person] == nil {
 		s.devices[r.Person] = map[string]messaging.DeviceRecord{}
 	}
@@ -90,18 +123,17 @@ func (s *Store) PutDevice(_ context.Context, r messaging.DeviceRecord) error {
 func (s *Store) Devices(_ context.Context, person string) ([]messaging.DeviceRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]messaging.DeviceRecord, 0, len(s.devices[person]))
-	for _, r := range s.devices[person] {
-		out = append(out, cloneRecord(r))
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	return s.records(person), nil
 }
 
-// AddRevocation keeps a revocation once and drops the device's keys.
-func (s *Store) AddRevocation(_ context.Context, v messaging.Revocation, device string) error {
+// AddRevocation keeps a revocation once and drops the device's keys, when
+// check says to.
+func (s *Store) AddRevocation(_ context.Context, v messaging.Revocation, device string, check store.DirectoryCheck) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if write, err := s.decide(v.Person, check); err != nil || !write {
+		return err
+	}
 	if !slices.ContainsFunc(s.revoked[v.Person], func(o messaging.Revocation) bool { return bytes.Equal(o.Signature, v.Signature) }) {
 		s.revoked[v.Person] = append(s.revoked[v.Person], cloneRevocation(v))
 	}
@@ -118,11 +150,7 @@ func (s *Store) AddRevocation(_ context.Context, v messaging.Revocation, device 
 func (s *Store) Revocations(_ context.Context, person string) ([]messaging.Revocation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]messaging.Revocation, len(s.revoked[person]))
-	for i, v := range s.revoked[person] {
-		out[i] = cloneRevocation(v)
-	}
-	return out, nil
+	return s.revocations(person), nil
 }
 
 // PutRecovery stores the wrapped backup key.

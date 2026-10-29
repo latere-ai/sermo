@@ -15,6 +15,11 @@ import (
 )
 
 const (
+	// lockDirectory holds a person's directory until the transaction
+	// ends, so no other directory write of the person reads or writes it
+	// meanwhile. The key is the person's in a space of the store's own.
+	lockDirectory = `select pg_advisory_xact_lock(hashtextextended('sermo.directory:' || $1, 0))`
+
 	putDevice = `
 insert into devices (person, id, kind, signature_key, encryption_key, voucher, voucher_key, vouch, possession)
 values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -69,57 +74,93 @@ from key_packages where person = $1 and device = $2 and last_resort`
 	deleteKeyPackages = `delete from key_packages where person = $1 and device = $2`
 )
 
-// PutDevice adds or replaces a record.
-func (s *Store) PutDevice(ctx context.Context, r messaging.DeviceRecord) error {
-	if _, err := s.pool.Exec(ctx, putDevice, r.Person, r.ID, r.Kind, r.SignatureKey, r.EncryptionKey,
-		r.Voucher, r.VoucherKey, r.Vouch, r.Possession); err != nil {
-		return fail("putting a device record", err)
+// writeDirectory is one directory write of a person's, in one
+// transaction: it takes the person's lock, reads their directory for
+// check, and sends write when check says to. An error of check's is
+// returned as it is.
+func (s *Store) writeDirectory(ctx context.Context, doing, person string, check store.DirectoryCheck, write *pgx.Batch) error {
+	var checkErr error
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, lockDirectory, person); err != nil {
+			return err
+		}
+		if check != nil {
+			records, err := list(ctx, tx, listDevices, []any{person}, scanRecord)
+			if err != nil {
+				return err
+			}
+			revocations, err := list(ctx, tx, listRevocations, []any{person}, scanRevocation)
+			if err != nil {
+				return err
+			}
+			ok, err := check(records, revocations)
+			if err != nil {
+				checkErr = err
+				return err
+			}
+			if !ok {
+				return nil
+			}
+		}
+		return tx.SendBatch(ctx, write).Close()
+	})
+	if checkErr != nil {
+		return checkErr
+	}
+	if err != nil {
+		return fail(doing, err)
 	}
 	return nil
 }
 
+// PutDevice adds or replaces a record when check says to.
+func (s *Store) PutDevice(ctx context.Context, r messaging.DeviceRecord, check store.DirectoryCheck) error {
+	b := &pgx.Batch{}
+	b.Queue(putDevice, r.Person, r.ID, r.Kind, r.SignatureKey, r.EncryptionKey, r.Voucher, r.VoucherKey, r.Vouch, r.Possession)
+	return s.writeDirectory(ctx, "putting a device record", r.Person, check, b)
+}
+
 // Devices lists a person's records by id.
 func (s *Store) Devices(ctx context.Context, person string) ([]messaging.DeviceRecord, error) {
-	out, err := list(ctx, s, listDevices, []any{person}, func(row pgx.CollectableRow) (messaging.DeviceRecord, error) {
-		var r messaging.DeviceRecord
-		err := row.Scan(&r.Person, &r.ID, &r.Kind, &r.SignatureKey, &r.EncryptionKey, &r.Voucher, &r.VoucherKey, &r.Vouch, &r.Possession)
-		return r, err
-	})
+	out, err := list(ctx, s.pool, listDevices, []any{person}, scanRecord)
 	if err != nil {
 		return nil, fail("listing device records", err)
 	}
 	return out, nil
 }
 
+func scanRecord(row pgx.CollectableRow) (messaging.DeviceRecord, error) {
+	var r messaging.DeviceRecord
+	err := row.Scan(&r.Person, &r.ID, &r.Kind, &r.SignatureKey, &r.EncryptionKey, &r.Voucher, &r.VoucherKey, &r.Vouch, &r.Possession)
+	return r, err
+}
+
 // AddRevocation keeps a revocation once and, when it names a device,
-// deletes that device's key packages and transfer with it.
-func (s *Store) AddRevocation(ctx context.Context, v messaging.Revocation, device string) error {
-	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		b := &pgx.Batch{}
-		b.Queue(addRevocation, v.Person, v.Key, v.Keep, v.By, orNone(v.Signature))
-		if device != "" {
-			b.Queue(deleteKeyPackages, v.Person, device)
-			b.Queue(deleteTransfer, v.Person, device)
-		}
-		return tx.SendBatch(ctx, b).Close()
-	})
-	if err != nil {
-		return fail("adding a revocation", err)
+// deletes that device's key packages and transfer with it, when check
+// says to.
+func (s *Store) AddRevocation(ctx context.Context, v messaging.Revocation, device string, check store.DirectoryCheck) error {
+	b := &pgx.Batch{}
+	b.Queue(addRevocation, v.Person, v.Key, v.Keep, v.By, orNone(v.Signature))
+	if device != "" {
+		b.Queue(deleteKeyPackages, v.Person, device)
+		b.Queue(deleteTransfer, v.Person, device)
 	}
-	return nil
+	return s.writeDirectory(ctx, "adding a revocation", v.Person, check, b)
 }
 
 // Revocations lists a person's revocations in the order they came.
 func (s *Store) Revocations(ctx context.Context, person string) ([]messaging.Revocation, error) {
-	out, err := list(ctx, s, listRevocations, []any{person}, func(row pgx.CollectableRow) (messaging.Revocation, error) {
-		var v messaging.Revocation
-		err := row.Scan(&v.Person, &v.Key, &v.Keep, &v.By, &v.Signature)
-		return v, err
-	})
+	out, err := list(ctx, s.pool, listRevocations, []any{person}, scanRevocation)
 	if err != nil {
 		return nil, fail("listing revocations", err)
 	}
 	return out, nil
+}
+
+func scanRevocation(row pgx.CollectableRow) (messaging.Revocation, error) {
+	var v messaging.Revocation
+	err := row.Scan(&v.Person, &v.Key, &v.Keep, &v.By, &v.Signature)
+	return v, err
 }
 
 // PutRecovery stores the wrapped backup key.

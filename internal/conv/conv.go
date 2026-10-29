@@ -179,48 +179,54 @@ func (s *Service) CheckDevice(ctx context.Context, person, device string) error 
 	return nil
 }
 
-// putRecord checks a record of the caller's, new or vouched for again
-// under its id with the same keys, against their directory, and keeps
-// it when it stands with the others.
-func (s *Service) putRecord(ctx context.Context, w Who, r messaging.DeviceRecord, stands func(*messaging.Directory) bool) (fresh bool, err error) {
-	records, revocations, err := s.records(ctx, w.Person)
-	if err != nil {
-		return false, err
-	}
-	before, _ := messaging.NewDirectory(w.Person, records, revocations, nil)
-	if before.Revoked(r.SignatureKey) {
-		return false, apierr.New(apierr.CodeExists, "a revoked key is not registered again")
-	}
-	rest := records[:0:0]
-	fresh = true
-	for _, old := range records {
-		if old.ID != r.ID {
-			rest = append(rest, old)
-			continue
+// putRecord is the check of a record of a person's, new or vouched for
+// again under its id with the same keys, which the store runs on their
+// directory as it is at the write: first, when set, refuses what the
+// directory rules out before the record is looked at, and stands says
+// whether the record stands with the others once it is in. A record
+// registered already, with the same voucher and vouch, is left as it is.
+func putRecord(person string, r messaging.DeviceRecord, first func(*messaging.Directory) error, stands func(*messaging.Directory) bool) store.DirectoryCheck {
+	return func(records []messaging.DeviceRecord, revocations []messaging.Revocation) (bool, error) {
+		before, _ := messaging.NewDirectory(person, records, revocations, nil)
+		if first != nil {
+			if err := first(before); err != nil {
+				return false, err
+			}
 		}
-		if !bytes.Equal(old.SignatureKey, r.SignatureKey) || !bytes.Equal(old.EncryptionKey, r.EncryptionKey) || old.Kind != r.Kind {
-			return false, apierr.New(apierr.CodeExists, "the record's id is registered with other keys")
+		if before.Revoked(r.SignatureKey) {
+			return false, apierr.New(apierr.CodeExists, "a revoked key is not registered again")
 		}
-		if old.Voucher == r.Voucher && bytes.Equal(old.Vouch, r.Vouch) {
-			return false, nil // registered already
+		rest := records[:0:0]
+		fresh := true
+		for _, old := range records {
+			if old.ID != r.ID {
+				rest = append(rest, old)
+				continue
+			}
+			if !bytes.Equal(old.SignatureKey, r.SignatureKey) || !bytes.Equal(old.EncryptionKey, r.EncryptionKey) || old.Kind != r.Kind {
+				return false, apierr.New(apierr.CodeExists, "the record's id is registered with other keys")
+			}
+			if old.Voucher == r.Voucher && bytes.Equal(old.Vouch, r.Vouch) {
+				return false, nil // registered already
+			}
+			fresh = false
 		}
-		fresh = false
+		// A revocation may keep a key before any record holds it, so a
+		// record a revoked key vouches for is never taken, whatever
+		// stands; one kept from before the revocation and registered
+		// again unchanged is answered above.
+		if err := before.CheckRecord(r); err != nil {
+			return false, apierr.Wrap(apierr.CodeInvalid, err)
+		}
+		if fresh && len(records) >= messaging.MaxRecords {
+			return false, apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d records", messaging.MaxRecords))
+		}
+		d, _ := messaging.NewDirectory(person, append(rest, r), revocations, nil)
+		if !stands(d) {
+			return false, apierr.New(apierr.CodeInvalid, "the record does not verify against the caller's records")
+		}
+		return true, nil
 	}
-	// A revocation may keep a key before any record holds it, so a record
-	// a revoked key vouches for is never taken, whatever stands; one kept
-	// from before the revocation and registered again unchanged is
-	// answered above.
-	if err := before.CheckRecord(r); err != nil {
-		return false, apierr.Wrap(apierr.CodeInvalid, err)
-	}
-	if fresh && len(records) >= messaging.MaxRecords {
-		return false, apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d records", messaging.MaxRecords))
-	}
-	d, _ := messaging.NewDirectory(w.Person, append(rest, r), revocations, nil)
-	if !stands(d) {
-		return false, apierr.New(apierr.CodeInvalid, "the record does not verify against the caller's records")
-	}
-	return fresh, nil
 }
 
 // RegisterDevice registers a device record of the caller's, vouched for
@@ -236,13 +242,10 @@ func (s *Service) RegisterDevice(ctx context.Context, w Who, r messaging.DeviceR
 	}); err != nil {
 		return err
 	}
-	if _, err := s.putRecord(ctx, w, r, func(d *messaging.Directory) bool {
+	return s.store.PutDevice(ctx, r, putRecord(w.Person, r, nil, func(d *messaging.Directory) bool {
 		got, ok := d.Device(r.ID)
 		return ok && bytes.Equal(got.Vouch, r.Vouch)
-	}); err != nil {
-		return err
-	}
-	return s.store.PutDevice(ctx, r)
+	}))
 }
 
 // Directory is a person's directory as Sermo holds it, for the caller to
@@ -276,33 +279,53 @@ func (s *Service) Revoke(ctx context.Context, w Who, v messaging.Revocation) err
 	if v.Person != w.Person {
 		return apierr.New(apierr.CodeInvalid, "the revocation is of a key of the caller")
 	}
-	records, revocations, err := s.records(ctx, w.Person)
+	// The authorizer is asked about the device whose key is revoked, so
+	// the device is read first; the store decides the revocation again
+	// from the directory as it is at the write, and refuses one whose key
+	// another record holds by then.
+	records, err := s.store.Devices(ctx, w.Person)
 	if err != nil {
 		return err
 	}
-	d, _ := messaging.NewDirectory(w.Person, records, revocations, nil)
-	changes, err := d.CheckRevocation(v)
-	if err != nil {
-		return apierr.Wrap(apierr.CodeInvalid, err)
-	}
-	device := ""
-	for _, r := range records {
-		if bytes.Equal(r.SignatureKey, v.Key) {
-			device = r.ID
-		}
-	}
+	device := holder(records, v.Key)
 	if err := s.ask(ctx, w, authorizer.ActionDeviceDelete, device, map[string]any{authorizer.FieldPerson: w.Person}); err != nil {
 		return err
 	}
-	if changes {
+	if err := s.store.AddRevocation(ctx, v, device, func(records []messaging.DeviceRecord, revocations []messaging.Revocation) (bool, error) {
+		// The authorizer's answer is about the device that held the key
+		// when it was asked, so a directory where another holds it is
+		// refused before the revocation is looked at.
+		if holder(records, v.Key) != device {
+			return false, apierr.New(apierr.CodeExists, "a record took the revoked key after the authorizer was asked about another")
+		}
+		d, _ := messaging.NewDirectory(w.Person, records, revocations, nil)
+		changes, err := d.CheckRevocation(v)
+		if err != nil {
+			return false, apierr.Wrap(apierr.CodeInvalid, err)
+		}
+		if !changes {
+			return false, nil
+		}
 		if len(revocations) >= messaging.MaxRevocations {
-			return apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d revocations", messaging.MaxRevocations))
+			return false, apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d revocations", messaging.MaxRevocations))
 		}
-		if err := s.store.AddRevocation(ctx, v, device); err != nil {
-			return err
-		}
+		return true, nil
+	}); err != nil {
+		return err
 	}
 	return s.proposeRemovals(ctx, w.Person, v.Key)
+}
+
+// holder is the id of the record with a signature key, the last by id
+// where several hold it, and empty where none does.
+func holder(records []messaging.DeviceRecord, key []byte) string {
+	id := ""
+	for _, r := range records {
+		if bytes.Equal(r.SignatureKey, key) {
+			id = r.ID
+		}
+	}
+	return id
 }
 
 // proposeRemovals proposes, as the external sender, the removal of every
@@ -398,20 +421,16 @@ func (s *Service) PutRecovery(ctx context.Context, w Who, r messaging.DeviceReco
 	if err := s.ask(ctx, w, authorizer.ActionBackupRecovery, "", map[string]any{authorizer.FieldPerson: w.Person}); err != nil {
 		return err
 	}
-	before, err := s.directory(ctx, w.Person)
-	if err != nil {
-		return err
+	replaces := func(before *messaging.Directory) error {
+		if old, ok := before.Recovery(); ok && old.ID != r.ID {
+			return apierr.New(apierr.CodeExists, "the recovery record it replaces is revoked first")
+		}
+		return nil
 	}
-	if old, ok := before.Recovery(); ok && old.ID != r.ID {
-		return apierr.New(apierr.CodeExists, "the recovery record it replaces is revoked first")
-	}
-	if _, err := s.putRecord(ctx, w, r, func(d *messaging.Directory) bool {
+	if err := s.store.PutDevice(ctx, r, putRecord(w.Person, r, replaces, func(d *messaging.Directory) bool {
 		got, ok := d.Recovery()
 		return ok && got.ID == r.ID && bytes.Equal(got.Vouch, r.Vouch)
-	}); err != nil {
-		return err
-	}
-	if err := s.store.PutDevice(ctx, r); err != nil {
+	})); err != nil {
 		return err
 	}
 	return s.store.PutRecovery(ctx, w.Person, wrapped)

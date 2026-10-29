@@ -4,6 +4,7 @@
 package httpapi_test
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -14,6 +15,8 @@ import (
 	"latere.ai/x/sdk-go/mls"
 
 	"latere.ai/x/sermo/internal/httpapi"
+	"latere.ai/x/sermo/internal/store"
+	"latere.ai/x/sermo/internal/store/memory"
 )
 
 // A conversation starts only from a group of the calling device alone,
@@ -385,4 +388,47 @@ func TestRecordMovedUnderAnotherRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.must(phone.call("POST", "/revocations", v, nil), http.StatusNoContent, "the phone revokes the laptop")
+}
+
+// meanwhile is the store in memory with a write of another request's
+// landing just before each revocation: what happens between the read
+// Revoke makes to name the device to the authorizer and its write.
+type meanwhile struct {
+	store.Store
+	before func(context.Context) error
+}
+
+func (m *meanwhile) AddRevocation(ctx context.Context, v messaging.Revocation, device string, check store.DirectoryCheck) error {
+	if m.before != nil {
+		if err := m.before(ctx); err != nil {
+			return err
+		}
+	}
+	return m.Store.AddRevocation(ctx, v, device, check)
+}
+
+// A revocation whose key another record holds by the time it is written
+// is refused, and nothing of it is kept: the authorizer was asked about
+// the device that held the key when the request came, and the revocation
+// would delete the keys of that one and revoke the other's.
+func TestARevokedKeyTakenMeanwhile(t *testing.T) {
+	m := &meanwhile{Store: memory.New(nil)}
+	e := newEnv(t, func(o *options) { o.store = m })
+	alice := e.newDevice("alice", "phone")
+	tablet := e.vouched(alice, "tablet")
+	taken := tablet.record
+	taken.ID = "z-tablet"
+	m.before = func(ctx context.Context) error { return m.PutDevice(ctx, taken, nil) }
+	v := messaging.Revocation{Person: "alice", Key: tablet.record.SignatureKey}
+	if err := v.Sign("phone", alice.key); err != nil {
+		t.Fatal(err)
+	}
+	if a := alice.call("POST", "/revocations", v, nil); a.code != "exists" {
+		t.Errorf("a revocation of a key another record took meanwhile: %+v, want exists", a)
+	}
+	var list httpapi.DeviceList
+	e.must(alice.call("GET", "/people/alice/devices", nil, &list), http.StatusOK, "list")
+	if len(list.Revocations) != 0 {
+		t.Errorf("the refused revocation was kept: %+v", list.Revocations)
+	}
 }

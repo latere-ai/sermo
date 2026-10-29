@@ -511,7 +511,7 @@ func TestAWriteThatFailsChangesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := messaging.Revocation{Person: "person-a", By: "dev-a", Signature: []byte("fake revocation signature")}
-	refused(t, s.AddRevocation(ctx, v, "dev-\x00"), "AddRevocation whose device the database refuses")
+	refused(t, s.AddRevocation(ctx, v, "dev-\x00", nil), "AddRevocation whose device the database refuses")
 	if vs, err := s.Revocations(ctx, "person-a"); err != nil || len(vs) != 0 {
 		t.Errorf("a refused revocation was kept: %+v, %v", vs, err)
 	}
@@ -528,7 +528,7 @@ func TestARevocationWithNoSignatureIsKeptOnce(t *testing.T) {
 	ctx := t.Context()
 	v := messaging.Revocation{Person: "person-a", By: "dev-a", Key: []byte("fake signature key")}
 	for range 2 {
-		if err := s.AddRevocation(ctx, v, ""); err != nil {
+		if err := s.AddRevocation(ctx, v, "", nil); err != nil {
 			t.Fatalf("AddRevocation with no signature: %v", err)
 		}
 	}
@@ -623,7 +623,7 @@ func TestIDsSortByteByByte(t *testing.T) {
 	ctx := t.Context()
 	ids := []string{"ab", "B", "a-c", "é", "Z", "a"}
 	for _, id := range ids {
-		if err := s.PutDevice(ctx, messaging.DeviceRecord{Person: "person-a", ID: id}); err != nil {
+		if err := s.PutDevice(ctx, messaging.DeviceRecord{Person: "person-a", ID: id}, nil); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.CreateConversation(ctx, store.Conversation{ID: id, People: []string{"person-a"}}); err != nil {
@@ -736,9 +736,9 @@ func TestPingAndClose(t *testing.T) {
 	}
 	_, _, countErr := s.CountKeyPackages(ctx, "person-a", "dev-a")
 	for what, err := range map[string]error{
-		"PutDevice":            s.PutDevice(ctx, messaging.DeviceRecord{Person: "person-a", ID: "dev-a"}),
+		"PutDevice":            s.PutDevice(ctx, messaging.DeviceRecord{Person: "person-a", ID: "dev-a"}, nil),
 		"Devices":              second(s.Devices(ctx, "person-a")),
-		"AddRevocation":        s.AddRevocation(ctx, messaging.Revocation{Person: "person-a"}, "dev-a"),
+		"AddRevocation":        s.AddRevocation(ctx, messaging.Revocation{Person: "person-a"}, "dev-a", nil),
 		"Revocations":          second(s.Revocations(ctx, "person-a")),
 		"PutRecovery":          s.PutRecovery(ctx, "person-a", []byte("fake wrapped key")),
 		"Recovery":             second(s.Recovery(ctx, "person-a")),
@@ -778,12 +778,12 @@ func TestNothingLeavesTheBytesItWasHanded(t *testing.T) {
 		Person: "person-a", ID: "dev-a", Voucher: "dev-a",
 		SignatureKey: planted("signature key"), EncryptionKey: planted("encryption key"), VoucherKey: planted("voucher key"),
 		Vouch: planted("vouch"), Possession: planted("possession"),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AddRevocation(ctx, messaging.Revocation{
 		Person: "person-a", By: "dev-a", Key: planted("revoked key"), Keep: [][]byte{planted("kept key")}, Signature: planted("signature"),
-	}, ""); err != nil {
+	}, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.PutRecovery(ctx, "person-a", planted("wrapped backup key")); err != nil {

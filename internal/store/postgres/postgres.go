@@ -262,9 +262,14 @@ func (s *Store) inTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	return pgx.BeginFunc(ctx, s.pool, fn)
 }
 
+// querier is the pool, or a transaction of it.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // list runs a query and scans each row it returns.
-func list[T any](ctx context.Context, s *Store, sql string, args []any, scan func(pgx.CollectableRow) (T, error)) ([]T, error) {
-	rows, err := s.pool.Query(ctx, sql, args...)
+func list[T any](ctx context.Context, q querier, sql string, args []any, scan func(pgx.CollectableRow) (T, error)) ([]T, error) {
+	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}

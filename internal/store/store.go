@@ -33,14 +33,16 @@ var (
 // for concurrent use.
 type Store interface {
 	// PutDevice adds a directory record of a person, a device's or a
-	// recovery key's, or replaces the one with its id.
-	PutDevice(ctx context.Context, r messaging.DeviceRecord) error
+	// recovery key's, or replaces the one with its id, when check, given
+	// the person's directory as it is at the write, says to.
+	PutDevice(ctx context.Context, r messaging.DeviceRecord, check DirectoryCheck) error
 	// Devices lists every record of a person by id.
 	Devices(ctx context.Context, person string) ([]messaging.DeviceRecord, error)
 	// AddRevocation keeps a revocation of a person's, once however often
 	// it is added, and when device is not empty deletes that device's key
-	// packages and transfer, in one transaction.
-	AddRevocation(ctx context.Context, v messaging.Revocation, device string) error
+	// packages and transfer, in one transaction, when check, given the
+	// person's directory as it is at the write, says to.
+	AddRevocation(ctx context.Context, v messaging.Revocation, device string, check DirectoryCheck) error
 	// Revocations lists every revocation of a person, in the order they
 	// were added.
 	Revocations(ctx context.Context, person string) ([]messaging.Revocation, error)
@@ -96,6 +98,18 @@ type Store interface {
 	// and every welcome filed before it, and says how many messages went.
 	DeleteMessagesBefore(ctx context.Context, before time.Time) (int, error)
 }
+
+// DirectoryCheck decides a directory write from a person's records and
+// revocations as they are at the write; write false makes the call a
+// no-op. No other directory write of the person, a PutDevice or an
+// AddRevocation, falls between the directory check sees and the write it
+// decides, so two writes cannot both pass on one directory. An error from
+// check is the call's, unchanged.
+//
+// check runs while the person's directory is held, so it decides from
+// what it is given and calls nothing of the store's. The records and
+// revocations are its own to change. A nil check writes.
+type DirectoryCheck func(records []messaging.DeviceRecord, revocations []messaging.Revocation) (write bool, err error)
 
 // KeyPackage is one key package of a device.
 type KeyPackage struct {
