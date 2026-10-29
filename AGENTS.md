@@ -1,0 +1,13 @@
+- Respond short, precise, and concise.
+- If you didn't add a test, you didn't fix a bug. Every bug fix must include a reproducible test that fails without the fix and passes with it.
+- Specs live in specs/. When implementing a big feature, create specs first then implement. Each spec is tightly scoped. When a spec is completed, record the outcome and archive it.
+- Commit frequently, one small scope diff at a time. Push to main once a full batch of work is complete and verified.
+- Leftovers are cleaned up in follow-up commits.
+- Target a high quality outcome, >90% coverage, each feature verified via an e2e test.
+- Write in audience language: documents aim at user value and usage, the API surface aims at builder precision, code comments aim at technical precision.
+- This repository is public. No Latere hostname, token, or internal reference anywhere but as a default or an example. The hosted plane that builds on it lives elsewhere and is one consumer among any.
+- What people write to each other is the thing this service exists never to read. The server stores ciphertext and the metadata it needs to deliver and decide, and nothing it logs, records, returns or keeps in a test fixture carries a message's plaintext or a private key; a claim that one never leaves is proven by a test that plants a canary value and searches for it.
+- The assistant's member is the one exception, and only while a conversation's owners let it in: its keys are sealed under the installation's key, it decrypts only for a caller the authorizer allows, and turning it off destroys every secret it held for that group. A change that widens when it can read is a change to the threat model, written there first.
+- MLS is `latere.ai/x/sdk-go/mls`. The server parses and checks what clients send with it and never reimplements the protocol here.
+- Relevant latere projects and shared components (latere.ai/x/pkg/*) are in ../
+- Every sentence is written for one reader (user, contributor, developer) and the register follows the reader; an error has one code, one fixed user sentence in `message`, and one developer detail in a separate field. The rule and the review checklist: https://github.com/latere-ai/pkg/blob/main/docs/writing/registers.md
