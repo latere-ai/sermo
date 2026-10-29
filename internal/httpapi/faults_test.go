@@ -35,13 +35,21 @@ type faults struct {
 	inner store.Store
 	mu    sync.Mutex
 	left  int
+	fired bool
 }
 
 // arm makes the n-th call from now fail; zero fails none.
 func (f *faults) arm(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.left = n
+	f.left, f.fired = n, false
+}
+
+// didFire reports whether the armed call failed since arm.
+func (f *faults) didFire() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fired
 }
 
 func (f *faults) tick() error {
@@ -52,6 +60,7 @@ func (f *faults) tick() error {
 	}
 	f.left--
 	if f.left == 0 {
+		f.fired = true
 		return errInjected
 	}
 	return nil
@@ -272,13 +281,17 @@ func TestStoreFaults(t *testing.T) {
 			return alice.call("POST", "/conversations", httpapi.CreateBody{ID: id, GroupInfo: info}, nil)
 		}},
 	}
+	// Every store call a request makes fails in turn, until the request
+	// makes fewer calls than the countdown, and each failure answers
+	// internal, whatever the request would have answered had it gone on.
 	for _, r := range requests {
 		failed := 0
 		for k := 1; k < 50; k++ {
 			f.arm(k)
 			a := r.do()
+			fired := f.didFire()
 			f.arm(0)
-			if a.status < http.StatusInternalServerError {
+			if !fired {
 				break
 			}
 			if a.code != "internal" {

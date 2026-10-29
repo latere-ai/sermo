@@ -447,7 +447,11 @@ func (s *Service) PutTransfer(ctx context.Context, w Who, device string, sealed 
 		return apierr.New(apierr.CodeInvalid, "the sealed backup key is missing or too large")
 	}
 	if err := s.CheckDevice(ctx, w.Person, device); err != nil {
-		return apierr.New(apierr.CodeNotFound, "the device is not registered")
+		var ae *apierr.Error
+		if errors.As(err, &ae) && ae.Code == apierr.CodeNotYourDevice {
+			return apierr.New(apierr.CodeNotFound, "the device is not registered")
+		}
+		return err
 	}
 	if err := s.ask(ctx, w, authorizer.ActionDeviceVouch, device, map[string]any{authorizer.FieldPerson: w.Person}); err != nil {
 		return err
