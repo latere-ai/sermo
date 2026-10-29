@@ -40,13 +40,14 @@ const (
 type Settings struct {
 	Addr string // SERMO_ADDR
 	// DatabaseURL is Postgres. Empty keeps everything in memory, for a
-	// trial: nothing survives a restart.
-	DatabaseURL string // SERMO_DATABASE_URL
+	// trial: nothing survives a restart. It may carry a password, so it
+	// prints as a placeholder.
+	DatabaseURL Secret // SERMO_DATABASE_URL
 	// DatabasePoolURL is a pooled endpoint of the same database, which
 	// the server serves over once its migrations have run over
 	// DatabaseURL: a migration holds a session, which a transaction-mode
 	// pooler does not keep. Empty serves over DatabaseURL.
-	DatabasePoolURL string // SERMO_DATABASE_POOL_URL
+	DatabasePoolURL Secret // SERMO_DATABASE_POOL_URL
 
 	// OIDCIssuers are the issuers whose tokens are accepted, and
 	// OIDCAudiences the audiences a token may be addressed to.
@@ -75,9 +76,10 @@ type Settings struct {
 }
 
 // Durable reports whether the server keeps its state in a database.
-func (s Settings) Durable() bool { return s.DatabaseURL != "" }
+func (s Settings) Durable() bool { return s.DatabaseURL.Reveal() != "" }
 
-// Secret is a value read from a file that no log line prints.
+// Secret is a value no log line prints: one read from a file, or a
+// database URL, which may carry a password.
 type Secret struct{ value string }
 
 // NewSecret wraps a value.
@@ -140,8 +142,8 @@ func FromEnv(getenv func(string) string) (Settings, error) {
 	if v := r.env("SERMO_ADDR"); v != "" {
 		s.Addr = v
 	}
-	s.DatabaseURL = r.env("SERMO_DATABASE_URL")
-	s.DatabasePoolURL = r.env("SERMO_DATABASE_POOL_URL")
+	s.DatabaseURL = NewSecret(r.env("SERMO_DATABASE_URL"))
+	s.DatabasePoolURL = NewSecret(r.env("SERMO_DATABASE_POOL_URL"))
 	s.OIDCIssuers = r.urls("SERMO_OIDC_ISSUERS")
 	if v := r.list("SERMO_OIDC_AUDIENCE"); len(v) > 0 {
 		s.OIDCAudiences = v
@@ -215,7 +217,7 @@ func (s Settings) refusals() []error {
 	if s.AuthorizerURL != "" && s.AuthorizerTokenFile == "" {
 		errs = append(errs, errors.New("SERMO_AUTHORIZER_TOKEN_FILE is not set: name the file of the bearer SERMO_AUTHORIZER_URL is asked with"))
 	}
-	if s.DatabasePoolURL != "" && s.DatabaseURL == "" {
+	if s.DatabasePoolURL.Reveal() != "" && !s.Durable() {
 		errs = append(errs, errors.New("SERMO_DATABASE_POOL_URL is set and SERMO_DATABASE_URL is not: name the direct endpoint the migrations run over"))
 	}
 	if s.Durable() && s.ServiceKeyFile == "" {

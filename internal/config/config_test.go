@@ -113,11 +113,11 @@ func TestEveryVariable(t *testing.T) {
 	if s.Addr != "127.0.0.1:9000" {
 		t.Errorf("Addr = %q", s.Addr)
 	}
-	if s.DatabaseURL != "postgres://sermo@db.example/sermo" || !s.Durable() {
-		t.Errorf("DatabaseURL = %q, Durable = %v", s.DatabaseURL, s.Durable())
+	if s.DatabaseURL.Reveal() != "postgres://sermo@db.example/sermo" || !s.Durable() {
+		t.Errorf("DatabaseURL = %q, Durable = %v", s.DatabaseURL.Reveal(), s.Durable())
 	}
-	if s.DatabasePoolURL != "postgres://sermo@pool.example/sermo?default_query_exec_mode=exec" {
-		t.Errorf("DatabasePoolURL = %q", s.DatabasePoolURL)
+	if s.DatabasePoolURL.Reveal() != "postgres://sermo@pool.example/sermo?default_query_exec_mode=exec" {
+		t.Errorf("DatabasePoolURL = %q", s.DatabasePoolURL.Reveal())
 	}
 	if want := []string{"https://one.example", "http://two.example:8443/realm"}; !slices.Equal(s.OIDCIssuers, want) {
 		t.Errorf("OIDCIssuers = %q, want %q", s.OIDCIssuers, want)
@@ -300,10 +300,10 @@ func TestErrorsNameTheVariableNotTheValue(t *testing.T) {
 	}
 }
 
-// TestSecretIsRedacted checks that a secret and the service key print as
-// a placeholder through every way a log line formats a value, alone and
-// as fields of the settings, and that Reveal and Private still give
-// them.
+// TestSecretIsRedacted checks that a secret, the service key and the
+// database URLs print as a placeholder through every way a log line
+// formats a value, alone and as fields of the settings, and that Reveal
+// and Private still give them.
 func TestSecretIsRedacted(t *testing.T) {
 	value := "canary-" + rand.Text()
 	s := config.NewSecret(value)
@@ -321,8 +321,10 @@ func TestSecretIsRedacted(t *testing.T) {
 	for i, b := range priv {
 		numbers[i] = strconv.Itoa(int(b))
 	}
-	leaks := []string{value, strings.Join(numbers, " "), hex.EncodeToString(priv), strings.ToUpper(hex.EncodeToString(priv)), base64.StdEncoding.EncodeToString(priv)}
-	settings := config.Settings{AuthorizerToken: s, ServiceKey: k}
+	password := "canary-" + rand.Text()
+	leaks := []string{value, password, strings.Join(numbers, " "), hex.EncodeToString(priv), strings.ToUpper(hex.EncodeToString(priv)), base64.StdEncoding.EncodeToString(priv)}
+	settings := config.Settings{AuthorizerToken: s, ServiceKey: k,
+		DatabaseURL: config.NewSecret("postgres://sermo:" + password + "@db.example/sermo"), DatabasePoolURL: config.NewSecret("postgres://sermo:" + password + "@pool.example/sermo")}
 	var printed []string
 	for _, verb := range []string{"%v", "%+v", "%s", "%q", "%#v", "%d", "%x", "%X", "%08v"} {
 		printed = append(printed, fmt.Sprintf(verb, s), fmt.Sprintf(verb, k), fmt.Sprintf(verb, settings), fmt.Sprintf(verb, &settings))
@@ -352,7 +354,7 @@ func TestSecretIsRedacted(t *testing.T) {
 				t.Errorf("a log line printed a secret: %s", line)
 			}
 		}
-		if strings.Count(line, "[redacted]") != 4 {
+		if strings.Count(line, "[redacted]") != 6 {
 			t.Errorf("a log line printed a secret without its placeholder: %s", line)
 		}
 	}
