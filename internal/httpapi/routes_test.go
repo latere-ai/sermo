@@ -371,11 +371,12 @@ func TestConversationRoutes(t *testing.T) {
 	}
 	_, last = bob.catchUp(id, last)
 
-	// bob's tablet joins on its own from the group info Sermo holds.
+	// bob's tablet joins on its own from the group info Sermo holds, no
+	// older than the epoch bob's phone hands it over the pairing.
 	tablet := e.vouched(bob, "tablet")
 	var gi httpapi.GroupInfoBody
 	e.must(tablet.call("GET", "/conversations/"+id+"/group-info", nil, &gi), http.StatusOK, "group info")
-	g, msg, err := tablet.policy().JoinExternal(gi.GroupInfo, tablet.signer, tablet.id)
+	g, msg, err := tablet.policy().JoinExternal(gi.GroupInfo, tablet.signer, tablet.id, bob.group.Epoch())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,7 @@ tool latere.ai/x/ci-gate/cmd/lateregate
 
 require (
 	latere.ai/x/pkg v0.110.1
-	latere.ai/x/sdk-go v0.14.1-0.20261029221209-ef36fca60fad
+	latere.ai/x/sdk-go v0.14.1-0.20261029222915-b563be1ed5ef
 )
 
 require (

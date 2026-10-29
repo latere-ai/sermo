@@ -301,3 +301,42 @@ func TestRecordUnderARevokedKey(t *testing.T) {
 		t.Fatal("the record would not stand once listed, so this test does not show what the refusal stops")
 	}
 }
+
+// A record under alice's laptop's id with another key, properly signed
+// and vouched for by her phone, would take the laptop out of her
+// directory with every revocation it signs; so would one with the
+// laptop's key under another id. Both are refused, and the laptop still
+// revokes the phone.
+func TestRecordBesideAnother(t *testing.T) {
+	e := newEnv(t)
+	phone := e.newDevice("alice", "phone")
+	laptop := e.vouched(phone, "laptop")
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		id  string
+		key ed25519.PrivateKey
+	}{"the laptop's id": {"laptop", key}, "the laptop's key": {"pad", laptop.key}} {
+		rec, err := messaging.NewDeviceRecord("alice", c.id, c.key, enc.PublicKey(), &phone.record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rec.Sign(phone.key); err != nil {
+			t.Fatal(err)
+		}
+		if a := phone.call("PUT", "/devices/"+c.id, rec, nil); a.code != "exists" && a.code != "invalid" {
+			t.Errorf("a record with %s: %+v", name, a)
+		}
+	}
+	v := messaging.Revocation{Person: "alice", Key: phone.record.SignatureKey, Keep: [][]byte{laptop.record.SignatureKey}}
+	if err := v.Sign(laptop.id.Device, laptop.key); err != nil {
+		t.Fatal(err)
+	}
+	e.must(laptop.call("POST", "/revocations", v, nil), http.StatusNoContent, "the laptop revokes the phone")
+}
