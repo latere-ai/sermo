@@ -5,7 +5,9 @@ MLS, where an assistant reads a conversation only while its owners let
 it in.** People's devices encrypt every message for the members of the
 conversation with Messaging Layer Security (RFC 9420). Sermo delivers
 the ciphertext in order, keeps the directory of each person's devices
-and the keys they offer, and stores history and backups it cannot open.
+and the keys they offer, and checks every change to a conversation the
+way every device does. Files, shared history and backups are sealed on
+the devices and kept in a storage service you run, never in Sermo.
 
 An assistant joins a conversation the way a person does: an owner's
 device adds its member to the encrypted group, and every member sees
@@ -25,7 +27,8 @@ flowchart LR
   devices["people's devices<br/>MLS state and keys"] -->|"ciphertext, commits,<br/>key packages"| sermod
   caller["a caller with its own token,<br/>such as an assistant's session"] -->|"read or post<br/>as the assistant"| sermod
   sermod --> pg[("Postgres: directory, ordered log,<br/>public group state")]
-  sermod --> s3[("object store: history shares,<br/>backups, attachments")]
+  devices -->|"sealed files, history,<br/>backups"| storage[("your storage service")]
+  storage -. "is this reader in the conversation?" .-> sermod
   sermod -. "verify the token" .-> issuer["your OpenID Connect issuer"]
   sermod -. "may this caller?" .-> authz["your authorizer"]
 ```
@@ -34,9 +37,8 @@ flowchart LR
 
 - What people write is never readable by the server, unless the
   conversation's owners let the assistant in, which every member sees.
-- A person's recovery key never reaches the server. A history backup
-  is stored only as ciphertext, and nothing the operator can do opens
-  it.
+- A person's recovery key never reaches the server. A backup is kept
+  only as ciphertext, and nothing the operator can do opens it.
 - Every change to who is in a conversation, who owns it and whether
   the assistant may read is a commit signed by the member who made it,
   checked by every device and by the server.

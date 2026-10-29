@@ -5,7 +5,7 @@ track: core
 depends_on:
   - specs/001-architecture.md
   - specs/002-api.md
-affects: [authorizer/, internal/authn/, internal/httpapi/]
+affects: [authorizer/, internal/access/, internal/httpapi/, cmd/sermod/]
 effort: medium
 created: 2026-10-29
 updated: 2026-10-29
@@ -29,9 +29,13 @@ asked.
 ### Identity
 
 A token is verified against the issuer's keys, with Sermo's audience.
-The subject is the issuer and the sub joined, as
-`latere.ai/x/pkg/authz` renders it, and a person is that subject: the
-directory, the conversations' people and the recovery records are keyed by it. A
+The authorizer's subject is the issuer and the sub joined, as
+`latere.ai/x/pkg/authz` renders it. A person is the sub alone, which
+every device's credential names (`user:<sub>/device:<id>`): the
+directory, the conversations' people and the recovery records are keyed
+by it. Every issuer one server lists therefore issues subs from one
+namespace, such as one identity provider under more than one address;
+issuers whose subs can collide are two servers. A
 device names itself in `Sermo-Device`; Sermo checks the device is one
 of the subject's that is not revoked. A caller for the assistant, such
 as an agent's session, presents its own token, and Sermo passes its
@@ -85,7 +89,10 @@ The vocabulary, which the package `authorizer` declares once:
 
 A deny is answered `403 forbidden`, with the authorizer's reason in the
 error's `detail`. An authorizer that does not answer fails the request
-closed with `503 authorizer_unavailable`.
+closed with `503 authorizer_unavailable`. `sermod` starts only once the
+authorizer refuses the probe every authorizer refuses; without
+`SERMO_AUTHORIZER_URL` it decides in process by the member policy: a
+person acts on their own records and on conversations they are in.
 
 ## Acceptance criteria
 

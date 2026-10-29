@@ -81,18 +81,64 @@ and its formats are named here so a reader of this repository finds them.
 | Required capabilities | extensions 0xF5E0 and 0xF5E1 |
 | External senders | Sermo alone, which proposes removals of people's devices and nothing else |
 | Group id | the conversation id's bytes |
-| Vouch | an Ed25519 signature over the label `latere messaging vouch v1` and the record |
+| Vouch | an Ed25519 signature by the voucher over the label `latere messaging vouch v1` and the record, which names its voucher's id and key |
+| Possession | an Ed25519 signature by the record's own key over the label `latere messaging possession v1` and the same record |
+| Revocation | an Ed25519 signature over the label `latere messaging revocation v1`, the key revoked and the keys it keeps |
 | History notice | the commit's authenticated data: the range under the exporter label `latere messaging history notice v1`, and for each joining leaf, sealed with EncryptWithLabel `conversation history` to its key package's init key |
 | Recovery key | 2 version bits, 128 random bits and a 10-bit check, in 28 characters of Crockford's base32 in seven groups of four |
+| Commit notice digest | a Welcome extension in the group info the committer signs, binding a joiner to the notice the commit carries |
 
 The assistant's credential and attestation name `latere` because the
 messaging package fixes them; an installation signs the attestation with
 its own key, which its apps pin.
 
+### The directory
+
+A person's devices are records, each vouched for by another record of
+the same person back to a root, a record that vouches for itself, and
+signed by its own key over the record and the voucher it names, so
+Sermo cannot list a key no device holds or move a record under another
+root. Sermo stores what devices send and serves it; every device
+verifies it with `messaging.NewDirectory`, and Sermo uses the same
+function to decide what it accepts:
+
+- A record is taken when `Directory.CheckRecord` passes and it stands
+  among the person's other records. A record a revoked key vouches for
+  is never taken, since a revocation may keep a key before any record
+  holds it. A person has at most `messaging.MaxRecords` records.
+- A revocation is signed by a record under the same root as the key it
+  revokes and names the records the key vouched for that stay; two
+  revocations of one key keep only what both name, so a dispute
+  between a person and a thief fails closed. Sermo keeps a revocation
+  only when `Directory.CheckRevocation` says it changes what stands,
+  which bounds a person's revocations by `messaging.MaxRevocations`.
+- On every revocation Sermo proposes, as the external sender, the
+  removal of each leaf with the revoked key from each of the person's
+  conversations, and proposes nothing else. Revoked records stay, so
+  the vouches under them still verify.
+
+A device takes a group it joins only when every leaf is a device that
+stands in its person's directory, or the assistant's member attested by
+the installation, and when a person's device signed the group info it
+joins from. Sermo applies the same check, `messaging.Policy.CheckJoin`,
+to the group a conversation starts with.
+
+### What Sermo cannot check
+
+A handshake message's membership tag and a commit's confirmation tag
+are computed with the epoch's secrets, which only members hold. Sermo
+checks every commit's signature and rules, takes the first that passes
+as the epoch's, and delivers it. A member can send a commit whose tags
+are wrong: Sermo takes it, every other member refuses it, and the
+conversation can go no further, since its epoch is taken. The commit
+names its sender, whose signature Sermo checked; the owners start a new
+conversation without them. A member can do this only to a conversation
+it is in.
+
 ### Requests and identity
 
 Every request carries a bearer token from the issuer, whose audience is
-Sermo's. A person acts as the token's subject. A device names itself in
+Sermo's. A person is the token's `sub`. A device names itself in
 `Sermo-Device`, and Sermo checks that the device is one of the subject's
 before it accepts anything the device signed: a commit's sender leaf
 must carry that device's credential and key. A caller for the assistant
