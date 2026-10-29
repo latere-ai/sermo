@@ -340,3 +340,49 @@ func TestRecordBesideAnother(t *testing.T) {
 	}
 	e.must(laptop.call("POST", "/revocations", v, nil), http.StatusNoContent, "the laptop revokes the phone")
 }
+
+// A thief holding alice's laptop, which her phone vouched for, lists a
+// root of its own and then the laptop vouched for again under it, with
+// the same id and keys. Sermo refuses the move, so alice's revocation of
+// the laptop, signed under her root, still counts.
+func TestRecordMovedUnderAnotherRoot(t *testing.T) {
+	e := newEnv(t)
+	phone := e.newDevice("alice", "phone")
+	laptop := e.vouched(phone, "laptop")
+	_, tkey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenc, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	troot, err := messaging.NewDeviceRecord("alice", "t", tkey, tenc.PublicKey(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := troot.Sign(tkey); err != nil {
+		t.Fatal(err)
+	}
+	e.must(laptop.call("PUT", "/devices/t", troot, nil), http.StatusNoContent, "a new root")
+
+	enc, err := ecdh.X25519().NewPublicKey(laptop.record.EncryptionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := messaging.NewDeviceRecord("alice", "laptop", laptop.key, enc, &troot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := moved.Sign(tkey); err != nil {
+		t.Fatal(err)
+	}
+	if a := laptop.call("PUT", "/devices/laptop", moved, nil); a.code != "invalid" {
+		t.Errorf("the laptop moved under the thief's root: %+v", a)
+	}
+	v := messaging.Revocation{Person: "alice", Key: laptop.record.SignatureKey}
+	if err := v.Sign(phone.id.Device, phone.key); err != nil {
+		t.Fatal(err)
+	}
+	e.must(phone.call("POST", "/revocations", v, nil), http.StatusNoContent, "the phone revokes the laptop")
+}

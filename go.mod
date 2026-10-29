@@ -9,7 +9,7 @@ tool latere.ai/x/ci-gate/cmd/lateregate
 require (
 	github.com/goccy/go-yaml v1.19.2
 	latere.ai/x/pkg v0.110.1
-	latere.ai/x/sdk-go v0.14.1-0.20261029222915-b563be1ed5ef
+	latere.ai/x/sdk-go v0.14.1-0.20261029225256-ce2671b1b094
 )
 
 require (

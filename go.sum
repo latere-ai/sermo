@@ -101,3 +101,5 @@ latere.ai/x/sdk-go v0.14.1-0.20261029221209-ef36fca60fad h1:I+7+dlx3xfWGu6052fy5
 latere.ai/x/sdk-go v0.14.1-0.20261029221209-ef36fca60fad/go.mod h1:F6605Qld46Dzv7Ux76JW0zqZoq/oPtzDHt0fL6wVn/w=
 latere.ai/x/sdk-go v0.14.1-0.20261029222915-b563be1ed5ef h1:uIOG3Szn+fbhGurxQzXLDhW7bQjwrWuj02De6JAAWXc=
 latere.ai/x/sdk-go v0.14.1-0.20261029222915-b563be1ed5ef/go.mod h1:F6605Qld46Dzv7Ux76JW0zqZoq/oPtzDHt0fL6wVn/w=
+latere.ai/x/sdk-go v0.14.1-0.20261029225256-ce2671b1b094 h1:20JHst0xH3YvZ5DdLnuALcsl5L1styTdvUjXG0L+m6s=
+latere.ai/x/sdk-go v0.14.1-0.20261029225256-ce2671b1b094/go.mod h1:F6605Qld46Dzv7Ux76JW0zqZoq/oPtzDHt0fL6wVn/w=
