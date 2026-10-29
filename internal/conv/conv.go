@@ -187,7 +187,8 @@ func (s *Service) putRecord(ctx context.Context, w Who, r messaging.DeviceRecord
 	if err != nil {
 		return false, err
 	}
-	if d, _ := messaging.NewDirectory(w.Person, records, revocations, nil); d.Revoked(r.SignatureKey) {
+	before, _ := messaging.NewDirectory(w.Person, records, revocations, nil)
+	if before.Revoked(r.SignatureKey) {
 		return false, apierr.New(apierr.CodeExists, "a revoked key is not registered again")
 	}
 	rest := records[:0:0]
@@ -204,6 +205,13 @@ func (s *Service) putRecord(ctx context.Context, w Who, r messaging.DeviceRecord
 			return false, nil // registered already
 		}
 		fresh = false
+	}
+	// A revocation may keep a key before any record holds it, so a record
+	// a revoked key vouches for is never taken, whatever stands; one kept
+	// from before the revocation and registered again unchanged is
+	// answered above.
+	if err := before.CheckRecord(r); err != nil {
+		return false, apierr.Wrap(apierr.CodeInvalid, err)
 	}
 	if fresh && len(records) >= messaging.MaxRecords {
 		return false, apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d records", messaging.MaxRecords))

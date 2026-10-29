@@ -4,6 +4,7 @@
 package httpapi_test
 
 import (
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net/http"
@@ -249,5 +250,54 @@ func TestSendRefusals(t *testing.T) {
 	}
 	if a := alice.call("POST", "/key-packages/claim", httpapi.ClaimBody{Person: "bob", Conversation: "nothing-here"}, nil); a.code != "not_found" {
 		t.Errorf("a claim for no conversation: %+v", a)
+	}
+}
+
+// A thief holding alice's stolen phone, and x it made under it, revokes
+// the phone from x first, keeping her laptop and a key it holds no record
+// for yet. alice's own revocation of the phone, keeping the laptop,
+// changes nothing listed and is not kept; the record the thief then
+// registers for that key under the phone is refused, so nothing it named
+// stands.
+func TestRecordUnderARevokedKey(t *testing.T) {
+	e := newEnv(t)
+	phone := e.newDevice("alice", "phone")
+	laptop := e.vouched(phone, "laptop")
+	x := e.vouched(phone, "x")
+	_, later, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoke := func(by *device, keep ...[]byte) {
+		t.Helper()
+		v := messaging.Revocation{Person: "alice", Key: phone.record.SignatureKey, Keep: keep}
+		if err := v.Sign(by.id.Device, by.key); err != nil {
+			t.Fatal(err)
+		}
+		e.must(by.call("POST", "/revocations", v, nil), http.StatusNoContent, "revoke the phone from "+by.id.Device)
+	}
+	revoke(x, laptop.record.SignatureKey, later.Public().(ed25519.PublicKey))
+	revoke(laptop, laptop.record.SignatureKey)
+	var list httpapi.DeviceList
+	e.must(laptop.call("GET", "/people/alice/devices", nil, &list), http.StatusOK, "list")
+	if len(list.Revocations) != 1 {
+		t.Fatalf("Sermo keeps %d revocations; the test expects alice's to change nothing listed", len(list.Revocations))
+	}
+	rec, err := messaging.NewDeviceRecord("alice", "later", later, enc.PublicKey(), &phone.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Sign(phone.key); err != nil {
+		t.Fatal(err)
+	}
+	if a := e.call("PUT", "/devices/later", phone.token, "", rec, nil); a.code != "invalid" {
+		t.Errorf("a record the revoked phone vouched for: %+v", a)
+	}
+	if dir, _ := messaging.NewDirectory("alice", append(list.Records, rec), list.Revocations, nil); func() bool { _, ok := dir.Device("later"); return !ok }() {
+		t.Fatal("the record would not stand once listed, so this test does not show what the refusal stops")
 	}
 }
