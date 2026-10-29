@@ -14,7 +14,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	latere.ai/x/ci-gate v0.56.0
 	latere.ai/x/pkg v0.110.1
-	latere.ai/x/sdk-go v0.14.1-0.20261029225256-ce2671b1b094
+	latere.ai/x/sdk-go v0.15.0
 )
 
 require (
