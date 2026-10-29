@@ -33,6 +33,7 @@ import (
 	"latere.ai/x/sermo/internal/httpapi"
 	"latere.ai/x/sermo/internal/store"
 	"latere.ai/x/sermo/internal/store/memory"
+	"latere.ai/x/sermo/internal/store/postgres"
 )
 
 // syncBuffer is a buffer two goroutines write and read.
@@ -93,13 +94,57 @@ func TestStartFailures(t *testing.T) {
 	}{
 		"no issuer":    {map[string]string{}, "SERMO_OIDC_ISSUERS"},
 		"a bad listen": {map[string]string{"SERMO_OIDC_ISSUERS": iss.URL(), "SERMO_ADDR": "127.0.0.1:-1"}, "SERMO_ADDR"},
-		"a database": {map[string]string{"SERMO_OIDC_ISSUERS": iss.URL(), "SERMO_DATABASE_URL": "postgres://db.example/sermo",
+		"a database that does not answer": {map[string]string{"SERMO_OIDC_ISSUERS": iss.URL(),
+			"SERMO_DATABASE_URL":     "postgres://sermo:" + canaryPassword + "@127.0.0.1:1/sermo?connect_timeout=2",
 			"SERMO_SERVICE_KEY_FILE": seed}, "SERMO_DATABASE_URL"},
 	} {
 		var stderr bytes.Buffer
 		if code := run(t.Context(), nil, env(c.vars), io.Discard, &stderr); code != 1 || !strings.Contains(stderr.String(), c.want) {
 			t.Errorf("%s: exit %d, stderr %q", name, code, stderr.String())
 		}
+		if strings.Contains(stderr.String(), canaryPassword) {
+			t.Errorf("%s: the database's password reached the output: %q", name, stderr.String())
+		}
+	}
+}
+
+// canaryPassword is a database password no output may carry.
+const canaryPassword = "canary-db-password-6c1f"
+
+// closing is a store kept in a database, with what the server did to it.
+type closing struct {
+	store.Store
+	pings, closes atomic.Int32
+}
+
+func (c *closing) Ping(context.Context) error { c.pings.Add(1); return nil }
+func (c *closing) Close()                     { c.closes.Add(1) }
+
+// A database URL opens the Postgres store with both endpoints the
+// settings name, which readiness pings and a stop closes once.
+func TestDurableStore(t *testing.T) {
+	iss := issuertest.New(t, issuertest.WithDefaultAudience("sermo"))
+	_, seed := seedFile(t)
+	db := &closing{Store: memory.New(time.Now)}
+	var opened postgres.Options
+	was := openPostgres
+	openPostgres = func(_ context.Context, o postgres.Options) (durable, error) { opened = o; return db, nil }
+	t.Cleanup(func() { openPostgres = was })
+	s := start(t, map[string]string{"SERMO_OIDC_ISSUERS": iss.URL(), "SERMO_ADDR": "127.0.0.1:0",
+		"SERMO_DATABASE_URL": "postgres://direct.example/sermo", "SERMO_DATABASE_POOL_URL": "postgres://pooled.example/sermo",
+		"SERMO_SERVICE_KEY_FILE": seed})
+	if !strings.Contains(s.line, "store=postgres") {
+		t.Errorf("the start line: %q", s.line)
+	}
+	if opened.URL != "postgres://direct.example/sermo" || opened.PoolURL != "postgres://pooled.example/sermo" {
+		t.Errorf("opened %+v", opened)
+	}
+	if code, _ := get(t, s.base+"/readyz", ""); code != http.StatusOK || db.pings.Load() == 0 {
+		t.Errorf("/readyz: %d after %d pings", code, db.pings.Load())
+	}
+	s.stop(t)
+	if n := db.closes.Load(); n != 1 {
+		t.Errorf("the store was closed %d times", n)
 	}
 }
 

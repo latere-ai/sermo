@@ -33,6 +33,7 @@ import (
 	"latere.ai/x/sermo/internal/httpapi"
 	"latere.ai/x/sermo/internal/store"
 	"latere.ai/x/sermo/internal/store/memory"
+	"latere.ai/x/sermo/internal/store/postgres"
 )
 
 // Timing of a start and a stop. On a stop, readiness answers 503 at
@@ -40,9 +41,12 @@ import (
 // closes within the grace period; a read waiting for messages ends when
 // the stop begins.
 const (
-	drainDelay    = 3 * time.Second
-	gracePeriod   = 30 * time.Second
-	warmTimeout   = 10 * time.Second
+	drainDelay  = 3 * time.Second
+	gracePeriod = 30 * time.Second
+	warmTimeout = 10 * time.Second
+	// openTimeout bounds opening the database and running its
+	// migrations at start.
+	openTimeout   = time.Minute
 	clientTimeout = 10 * time.Second
 	readyTimeout  = 2 * time.Second
 	flushTimeout  = 5 * time.Second
@@ -213,13 +217,31 @@ func build(ctx context.Context, s config.Settings, logger *slog.Logger) (*server
 	return &server{svc: svc, handler: mux, stopping: stopping, storeKind: storeKind, authorizerKind: authorizerKind, close: closeStore}, nil
 }
 
+// durable is a store kept in a database, closed when the server stops.
+type durable interface {
+	store.Store
+	Close()
+}
+
+// openPostgres opens the Postgres store, running its migrations first; a
+// test stands in for it.
+var openPostgres = func(ctx context.Context, o postgres.Options) (durable, error) { return postgres.Open(ctx, o) }
+
 // openStore opens the store the settings name: Postgres for a database
 // URL, and memory, which keeps nothing across a restart, without one.
-func openStore(_ context.Context, s config.Settings) (store.Store, string, func(), error) {
-	if s.Durable() {
-		return nil, "", nil, errors.New("SERMO_DATABASE_URL is set and this build has no Postgres store")
+func openStore(ctx context.Context, s config.Settings) (store.Store, string, func(), error) {
+	if !s.Durable() {
+		return memory.New(time.Now), "memory", func() {}, nil
 	}
-	return memory.New(time.Now), "memory", func() {}, nil
+	opening, cancel := context.WithTimeout(ctx, openTimeout)
+	defer cancel()
+	st, err := openPostgres(opening, postgres.Options{URL: s.DatabaseURL.Reveal(), PoolURL: s.DatabasePoolURL.Reveal()})
+	if err != nil {
+		// The store's errors never carry the URL, whose password this
+		// line would print.
+		return nil, "", nil, fmt.Errorf("SERMO_DATABASE_URL: %w", err)
+	}
+	return st, "postgres", st.Close, nil
 }
 
 // ping asks a store that can answer whether it is reachable; one that
