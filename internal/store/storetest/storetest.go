@@ -838,13 +838,14 @@ func testCopies(t *testing.T, s store.Store) {
 	members := []store.Member{{Person: "person-a", Device: "dev-a"}, {Person: "person-b", Device: "dev-b", Since: 1}}
 	state := commit(read, 1, []string{"person-a", "person-b"}, members...)
 	w := welcome("w-1", "person-b", "dev-b")
-	_, err = s.Append(ctx, "c01", read.Version, store.Append{Message: sent, State: state, Welcomes: []store.Welcome{w}})
+	appended, err := s.Append(ctx, "c01", read.Version, store.Append{Message: sent, State: state, Welcomes: []store.Welcome{w}})
 	must(t, err, "Append")
 	clear(sent.Data)
 	clear(state.View)
 	clear(w.Data)
 	clear(w.Notice)
 	state.People[0], members[1].Device = "person-x", "dev-x"
+	clear(appended.Data)
 	msgs, err := s.Messages(ctx, "c01", 0, 10)
 	must(t, err, "Messages")
 	requiref(t, len(msgs) == 1, "Messages = %v, want one", each(msgs, seqOf))

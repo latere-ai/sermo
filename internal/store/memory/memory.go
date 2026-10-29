@@ -265,7 +265,10 @@ func (s *Store) Append(_ context.Context, id string, version int64, a store.Appe
 	now := s.now()
 	m := a.Message
 	m.Conversation, m.Seq, m.Created = id, c.Seq+1, now
-	m.Data = bytes.Clone(m.Data)
+	// The log keeps bytes of its own, shared with neither the caller's
+	// message nor the one returned.
+	kept := m
+	kept.Data = bytes.Clone(m.Data)
 	if a.State != nil {
 		next := cloneConversation(a.State)
 		next.ID, next.Created = id, c.Created
@@ -273,7 +276,7 @@ func (s *Store) Append(_ context.Context, id string, version int64, a store.Appe
 		*c = next
 	}
 	c.Seq, c.Updated = m.Seq, now
-	s.log[id] = append(s.log[id], m)
+	s.log[id] = append(s.log[id], kept)
 	for _, w := range a.Welcomes {
 		w.Conversation, w.Seq, w.Created = id, m.Seq, now
 		w.Data, w.Notice = bytes.Clone(w.Data), bytes.Clone(w.Notice)
