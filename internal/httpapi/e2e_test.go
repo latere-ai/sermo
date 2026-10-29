@@ -28,6 +28,7 @@ import (
 	"latere.ai/x/sermo/internal/access"
 	"latere.ai/x/sermo/internal/conv"
 	"latere.ai/x/sermo/internal/httpapi"
+	"latere.ai/x/sermo/internal/store"
 	"latere.ai/x/sermo/internal/store/memory"
 )
 
@@ -41,6 +42,7 @@ type env struct {
 	mu     sync.Mutex
 	seen   bytes.Buffer
 	logs   *syncBuffer
+	svc    *conv.Service
 }
 
 type syncBuffer struct {
@@ -60,14 +62,28 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-func newEnv(t *testing.T) *env {
+// option changes how newEnv builds sermod.
+type option func(*options)
+
+type options struct {
+	authorizer access.Authorizer
+	store      store.Store
+	maxBytes   int64
+	now        func() time.Time
+}
+
+func newEnv(t *testing.T, opts ...option) *env {
 	t.Helper()
+	o := options{authorizer: access.NewAuthorizer(access.MemberPolicy{}), store: memory.New(nil), maxBytes: 8 << 20} // the service's own clock
+	for _, opt := range opts {
+		opt(&o)
+	}
 	issuer := issuertest.New(t, issuertest.WithDefaultAudience("sermo"))
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := conv.New(conv.Options{Store: memory.New(nil), Authorizer: access.NewAuthorizer(access.MemberPolicy{}), ServiceKey: key})
+	svc, err := conv.New(conv.Options{Store: o.store, Authorizer: o.authorizer, ServiceKey: key, Now: o.now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,12 +92,12 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	logs := &syncBuffer{}
-	api, err := httpapi.New(httpapi.Options{Service: svc, Authenticator: verifier, MaxRequestBytes: 8 << 20,
+	api, err := httpapi.New(httpapi.Options{Service: svc, Authenticator: verifier, MaxRequestBytes: o.maxBytes,
 		Logger: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, srv: httptest.NewServer(api), issuer: issuer, logs: logs}
+	e := &env{t: t, srv: httptest.NewServer(api), issuer: issuer, logs: logs, svc: svc}
 	t.Cleanup(e.srv.Close)
 	return e
 }
@@ -183,6 +199,14 @@ type keyPackage struct {
 // publishes key packages.
 func (e *env) newDevice(person, name string) *device {
 	e.t.Helper()
+	d := e.register(person, name)
+	d.publish(2)
+	return d
+}
+
+// register makes a person's first device and registers it as a root.
+func (e *env) register(person, name string) *device {
+	e.t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		e.t.Fatal(err)
@@ -206,11 +230,12 @@ func (e *env) newDevice(person, name string) *device {
 	d := &device{e: e, person: person, id: id, token: e.issuer.Mint(issuertest.Claims{Sub: person}), key: key, enc: enc,
 		signer: signer, record: rec, kps: map[string]keyPackage{}}
 	e.must(e.call("PUT", "/devices/"+name, d.token, "", rec, nil), http.StatusNoContent, "register "+person)
-	d.publish(2)
 	return d
 }
 
-func (d *device) publish(n int) {
+// keyPackages makes n key packages of the device and keeps their
+// secrets for its Welcomes.
+func (d *device) keyPackages(n int) httpapi.KeyPackagesBody {
 	d.e.t.Helper()
 	var body httpapi.KeyPackagesBody
 	for range n {
@@ -221,7 +246,12 @@ func (d *device) publish(n int) {
 		d.kps[hex.EncodeToString(kp.Ref())] = keyPackage{kp, secrets}
 		body.KeyPackages = append(body.KeyPackages, kp.Bytes())
 	}
-	d.e.must(d.call("POST", "/key-packages", body, nil), http.StatusNoContent, "publish")
+	return body
+}
+
+func (d *device) publish(n int) {
+	d.e.t.Helper()
+	d.e.must(d.call("POST", "/key-packages", d.keyPackages(n), nil), http.StatusNoContent, "publish")
 }
 
 func (d *device) call(method, path string, in, out any) answer {
@@ -349,7 +379,8 @@ func (d *device) join(conversation string) messaging.HistoryRange {
 	return jn.Range
 }
 
-func (d *device) say(conversation, text string) httpapi.Sent {
+// seal is a text message from the device to its group.
+func (d *device) seal(text string) []byte {
 	d.e.t.Helper()
 	b, err := messaging.EncodePayload(messaging.Payload{ID: messaging.NewConversationID(), SentAt: time.Now().UTC().Truncate(time.Millisecond),
 		Type: messaging.PayloadText, Text: text})
@@ -360,8 +391,13 @@ func (d *device) say(conversation, text string) httpapi.Sent {
 	if err != nil {
 		d.e.t.Fatal(err)
 	}
+	return ct
+}
+
+func (d *device) say(conversation, text string) httpapi.Sent {
+	d.e.t.Helper()
 	var sent httpapi.Sent
-	d.e.must(d.call("POST", "/conversations/"+conversation+"/messages", httpapi.SendBody{Message: ct}, &sent), http.StatusCreated, "say")
+	d.e.must(d.call("POST", "/conversations/"+conversation+"/messages", httpapi.SendBody{Message: d.seal(text)}, &sent), http.StatusCreated, "say")
 	return sent
 }
 
@@ -505,6 +541,7 @@ func TestConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.must(bob.call("POST", "/revocations", v, nil), http.StatusNoContent, "revoke")
+	e.must(e.call("POST", "/revocations", bob.token, "", v, nil), http.StatusNoContent, "revoke again, the removal proposed already")
 	var page httpapi.MessageList
 	e.must(alice.call("GET", fmt.Sprintf("/conversations/%s/messages?after=%d", id, next), nil, &page), http.StatusOK, "read")
 	if len(page.Messages) != 1 || page.Messages[0].Kind != "proposal" || page.Messages[0].Person != "" {
