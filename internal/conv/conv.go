@@ -607,6 +607,8 @@ func (s *Service) Create(ctx context.Context, w Who, id string, groupInfo []byte
 		return nil, apierr.New(apierr.CodeInvalid, "a conversation starts with its creator as its one person and owner, and Off")
 	case !sameExtensions(view.Extensions(), opts.Extensions):
 		return nil, apierr.New(apierr.CodeInvalid, "the group's extensions are not the profile's with this server as its external sender")
+	case !carriesTreeAndKey(groupInfo, view):
+		return nil, apierr.New(apierr.CodeInvalid, "the group info carries the ratchet tree and the external public key")
 	}
 	d, err := s.directory(ctx, w.Person)
 	if err != nil {
