@@ -68,8 +68,9 @@ type Store interface {
 	// has neither.
 	ClaimKeyPackage(ctx context.Context, person, device string) (KeyPackage, error)
 
-	// CreateConversation stores a new conversation with its first state.
-	// ErrExists when the id is taken.
+	// CreateConversation stores a new conversation with its first state,
+	// at seq 0 and version 0 whatever it is handed: like its times, they
+	// are the store's. ErrExists when the id is taken.
 	CreateConversation(ctx context.Context, c Conversation) error
 	// Conversation reads one conversation.
 	Conversation(ctx context.Context, id string) (Conversation, error)

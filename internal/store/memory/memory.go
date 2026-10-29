@@ -217,7 +217,7 @@ func (s *Store) CreateConversation(_ context.Context, c store.Conversation) erro
 		return store.ErrExists
 	}
 	now := s.now()
-	c.Created, c.Updated = now, now
+	c.Seq, c.Version, c.Created, c.Updated = 0, 0, now, now
 	cc := cloneConversation(&c)
 	s.convs[c.ID] = &cc
 	return nil

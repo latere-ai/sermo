@@ -336,6 +336,20 @@ func testCreateConversation(t *testing.T, s store.Store) {
 	got, err := s.Conversation(ctx, "c01")
 	must(t, err, "Conversation")
 	checkf(t, sameState(got, group), "a refused create changed the conversation: %+v", got)
+
+	// The sequence number, the version and the times are the store's, so a
+	// conversation handed in with its own starts with no message and no
+	// change all the same.
+	handed := conversation("c03", "person-a")
+	handed.Seq, handed.Version, handed.Created, handed.Updated = 41, 7, time.Unix(0, 0), time.Unix(0, 0)
+	must(t, s.CreateConversation(ctx, handed), "CreateConversation with a seq, a version and times of its own")
+	got, err = s.Conversation(ctx, "c03")
+	must(t, err, "Conversation")
+	checkf(t, got.Seq == 0 && got.Version == 0, "a conversation created with seq 41 and version 7 has seq %d and version %d, want 0 and 0", got.Seq, got.Version)
+	checkf(t, !got.Created.Equal(handed.Created) && !got.Updated.Equal(handed.Updated), "a conversation kept the times it was handed: created %v, updated %v", got.Created, got.Updated)
+	m, err := s.Append(ctx, "c03", 0, store.Append{Message: msg(store.KindApplication, 0, "person-a", "dev-a", "first")})
+	must(t, err, "Append at version 0")
+	checkf(t, m.Seq == 1, "the first message has seq %d, want 1", m.Seq)
 }
 
 // testConversations checks that a person's conversations list by id,
