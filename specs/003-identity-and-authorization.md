@@ -18,7 +18,7 @@ author: changkun
 
 Sermo verifies who sends a request and asks an authorizer whether they
 may. It decides nothing about people itself: who may talk to whom, the
-limits on new conversations and invitations, blocks between people and
+limits on new conversations, blocks between people and
 an account's standing are the authorizer's. What Sermo does decide is
 what MLS and the conversation's rules decide, which every device decides
 too: a commit that breaks the rules is refused before the authorizer is
@@ -31,7 +31,7 @@ asked.
 A token is verified against the issuer's keys, with Sermo's audience.
 The subject is the issuer and the sub joined, as
 `latere.ai/x/pkg/authz` renders it, and a person is that subject: the
-directory, the conversations' people and the backups are keyed by it. A
+directory, the conversations' people and the recovery records are keyed by it. A
 device names itself in `Sermo-Device`; Sermo checks the device is one
 of the subject's that is not revoked. A caller for the assistant, such
 as an agent's session, presents its own token, and Sermo passes its
@@ -55,6 +55,7 @@ The vocabulary, which the package `authorizer` declares once:
 | `Conversation` | `conversation.send` | `id`, `conversation_kind`, `people`, `owners`, `level`, `size` |
 | `Conversation` | `conversation.commit` | `id`, `conversation_kind`, `people`, `owners`, `level`, `changes`, `add_people`, `remove_people`, `new_owners`, `new_level` |
 | `Conversation` | `conversation.leave` | `id`, `conversation_kind`, `people`, `owners`, `level` |
+| `Conversation` | `conversation.membership` | `id`, `conversation_kind`, `people`, `owners`, `level`, `person` |
 | `Conversation` | `conversation.assistant_read` | `id`, `conversation_kind`, `people`, `owners`, `level` |
 | `Conversation` | `conversation.assistant_post` | `id`, `conversation_kind`, `people`, `owners`, `level`, `asked_by` |
 | `Device` | `device.register` | `person`, `root` |
@@ -63,8 +64,6 @@ The vocabulary, which the package `authorizer` declares once:
 | `Device` | `device.delete` | `id`, `person` |
 | `KeyPackage` | `key_package.publish` | `person`, `device` |
 | `KeyPackage` | `key_package.claim` | `person`, `conversation` |
-| `Backup` | `backup.read` | `person` |
-| `Backup` | `backup.write` | `person` |
 | `Backup` | `backup.recovery` | `person` |
 
 - `people` and `owners` are the conversation's, as the epoch the request
@@ -77,7 +76,8 @@ The vocabulary, which the package `authorizer` declares once:
   `conversation.leave` when it removes its sender's own leaves, and as
   `conversation.commit` otherwise.
 - `size` is a sent message's length in bytes.
-- `person` is whose record, key package or backup it is; on
+- `person` is whose record, key package or recovery record it is, and
+  on `conversation.membership` the person asked about; on
   `key_package.claim`, the person claimed for, with the `conversation`
   the claim is for. `root` says a device registers as a new root, with
   no voucher among the person's records.

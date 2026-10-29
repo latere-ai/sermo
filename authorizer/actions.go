@@ -28,8 +28,7 @@ const (
 	// the level off.
 	ActionConversationCreate = "conversation.create"
 	// ActionConversationRead is asked by every read of a conversation: its
-	// record, its group info, its messages, its welcomes and its history
-	// bundles.
+	// record, its group info, its messages and its welcomes.
 	ActionConversationRead = "conversation.read"
 	// ActionConversationList is asked by the list of a person's
 	// conversations.
@@ -39,12 +38,16 @@ const (
 	ActionConversationSend = "conversation.send"
 	// ActionConversationCommit is asked by a commit the conversation's
 	// rules accept, and by a proposal that is not a leave, with what it
-	// changes; by uploading a history bundle; and by an owner's request
-	// for the assistant's key package.
+	// changes; and by an owner's request for the assistant's key
+	// package.
 	ActionConversationCommit = "conversation.commit"
 	// ActionConversationLeave is asked by a proposal that removes its
 	// sender's own leaves.
 	ActionConversationLeave = "conversation.leave"
+	// ActionConversationMembership is asked by a caller that asks whether
+	// a person is one of the conversation's people, as the plane does to
+	// decide a read of a file sent in the conversation.
+	ActionConversationMembership = "conversation.membership"
 	// ActionConversationAssistantRead is asked by a caller that reads the
 	// conversation as the assistant's member reads it.
 	ActionConversationAssistantRead = "conversation.assistant_read"
@@ -69,10 +72,6 @@ const (
 	// for a conversation.
 	ActionKeyPackageClaim = "key_package.claim"
 
-	// ActionBackupRead and ActionBackupWrite are asked by reading and
-	// writing a person's backup records and index.
-	ActionBackupRead  = "backup.read"
-	ActionBackupWrite = "backup.write"
 	// ActionBackupRecovery is asked by registering and reading the
 	// recovery record and the wrapped backup key.
 	ActionBackupRecovery = "backup.recovery"
@@ -146,6 +145,7 @@ var table = []action{
 	{ActionConversationSend, KindConversation, with(FieldSize), true},
 	{ActionConversationCommit, KindConversation, with(FieldChanges, FieldAddPeople, FieldRemovePeople, FieldNewOwners, FieldNewLevel), true},
 	{ActionConversationLeave, KindConversation, with(), true},
+	{ActionConversationMembership, KindConversation, with(FieldPerson), true},
 	{ActionConversationAssistantRead, KindConversation, with(), true},
 	{ActionConversationAssistantPost, KindConversation, with(FieldAskedBy), true},
 	{ActionDeviceRegister, KindDevice, []string{FieldPerson, FieldRoot}, false},
@@ -154,8 +154,6 @@ var table = []action{
 	{ActionDeviceDelete, KindDevice, []string{FieldPerson}, true},
 	{ActionKeyPackagePublish, KindKeyPackage, []string{FieldPerson, FieldDevice}, false},
 	{ActionKeyPackageClaim, KindKeyPackage, []string{FieldPerson, FieldConversation}, false},
-	{ActionBackupRead, KindBackup, []string{FieldPerson}, false},
-	{ActionBackupWrite, KindBackup, []string{FieldPerson}, false},
 	{ActionBackupRecovery, KindBackup, []string{FieldPerson}, false},
 }
 

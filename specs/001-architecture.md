@@ -24,9 +24,10 @@ every member sees; while it is a member, Sermo holds that member's keys,
 sealed.
 
 Sermo is one binary, `sermod`, with Postgres for the directory, the log
-and the groups' public state, an S3 object store for history shares and
-backups, an OpenID Connect issuer for identity and an HTTP authorizer
-for every decision. It reimplements nothing of MLS: it parses and checks
+and the groups' public state, an OpenID Connect issuer for identity and
+an HTTP authorizer for every decision. It keeps no file: what devices
+seal for a conversation, its attachments and history bundles, and each
+person's backup, is in a storage service the plane runs. It reimplements nothing of MLS: it parses and checks
 what devices send with `latere.ai/x/sdk-go/mls`, and applies the
 conversation rules of `latere.ai/x/sdk-go/messaging`, the package every
 device applies, so a commit the server accepts is a commit every honest
@@ -43,14 +44,13 @@ flowchart LR
   subgraph sermod
     api["HTTP API"] --> dir["directory and key packages"]
     api --> log["ordered log and commit checks"]
-    api --> hist["history shares and backups"]
+    api --> member["membership answers"]
     api --> asst["the assistant's member"]
     api --> notify["notices"]
   end
   dir --> pg[("Postgres")]
   log --> pg
   asst --> pg
-  hist --> s3[("object store")]
   api -.->|"verify"| oidc["OpenID Connect issuer"]
   api -.->|"may this?"| authz["authorizer"]
   notify -.->|"a notice, content-free"| outbox["notices endpoint"]
@@ -61,7 +61,7 @@ flowchart LR
 | Directory | Each person's device records, vouched for by another of their own, and their recovery record; revoked records stay, so vouches still verify | A private key |
 | Key packages | Each device's pool of one-time key packages and its last resort | The key packages' secrets |
 | Log | Every message of a conversation, numbered in one sequence; one commit per epoch, the first to arrive; the group's public state after each commit; the latest group info | A message's plaintext |
-| History shares and backups | Sealed bundles and backup records in the object store, and the wrapped backup key | A key that opens them |
+| Recovery | Each person's recovery record and wrapped backup key, and a backup key sealed to a new device until it fetches it | A key that opens them |
 | The assistant's member | Its MLS state per conversation, sealed under a data key of that conversation, while the level is not Off | Its state after the level is Off: the data key is destroyed first |
 
 ### The profile
@@ -114,7 +114,10 @@ or post.
 4. The assistant's member decrypts only for a caller the authorizer
    allows, and turning it off destroys its data key before anything
    else.
-5. The object store holds only what devices sealed.
+5. Sermo keeps no file. A device seals each attachment, history bundle
+   and backup record and keeps the ciphertext in a storage service the
+   plane runs, which asks Sermo, through `conversation.membership`,
+   whether a reader is one of a conversation's people.
 
 ## Acceptance criteria
 
