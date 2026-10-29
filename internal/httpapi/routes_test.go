@@ -454,6 +454,31 @@ func TestWelcomeAfterRemoval(t *testing.T) {
 	}
 }
 
+// A create answers the conversation as the store keeps it, with the
+// times it was stamped with, and a read of it answers the same.
+func TestCreateAnswersTheStoredConversation(t *testing.T) {
+	e := newEnv(t)
+	alice := e.newDevice("alice", "phone")
+	external := service(t, e)
+	id := messaging.NewConversationID()
+	opts, err := messaging.CreateOptions(messaging.State{Kind: messaging.KindGroup, People: []string{"alice"}, Owners: []string{"alice"}}, external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alice.group, err = mls.CreateGroup(messaging.GroupID(id), alice.signer, alice.id.Credential(), opts, alice.policy().Config()); err != nil {
+		t.Fatal(err)
+	}
+	var created, read httpapi.Conversation
+	e.must(alice.call("POST", "/conversations", httpapi.CreateBody{ID: id, GroupInfo: groupInfo(t, alice)}, &created), http.StatusCreated, "create")
+	e.must(alice.call("GET", "/conversations/"+id, nil, &read), http.StatusOK, "read")
+	if created.Created.IsZero() || created.Updated.IsZero() {
+		t.Fatalf("the create answered the times %s and %s", created.Created, created.Updated)
+	}
+	if !created.Created.Equal(read.Created) || !created.Updated.Equal(read.Updated) {
+		t.Fatalf("the create answered %s and %s, a read %s and %s", created.Created, created.Updated, read.Created, read.Updated)
+	}
+}
+
 // What every request is held to before the service sees it.
 func TestRequests(t *testing.T) {
 	e := newEnv(t, func(o *options) { o.maxBytes = 1 << 10 })

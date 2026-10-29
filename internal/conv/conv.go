@@ -646,7 +646,13 @@ func (s *Service) Create(ctx context.Context, w Who, id string, groupInfo []byte
 		}
 		return nil, err
 	}
-	return &c, nil
+	// The store stamps the times on the copy it keeps, so the answer is
+	// read back from it rather than built from c.
+	created, err := s.store.Conversation(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &created, nil
 }
 
 func sameExtensions(a, b []mls.Extension) bool {
