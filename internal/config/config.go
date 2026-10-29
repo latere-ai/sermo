@@ -42,6 +42,11 @@ type Settings struct {
 	// DatabaseURL is Postgres. Empty keeps everything in memory, for a
 	// trial: nothing survives a restart.
 	DatabaseURL string // SERMO_DATABASE_URL
+	// DatabasePoolURL is a pooled endpoint of the same database, which
+	// the server serves over once its migrations have run over
+	// DatabaseURL: a migration holds a session, which a transaction-mode
+	// pooler does not keep. Empty serves over DatabaseURL.
+	DatabasePoolURL string // SERMO_DATABASE_POOL_URL
 
 	// OIDCIssuers are the issuers whose tokens are accepted, and
 	// OIDCAudiences the audiences a token may be addressed to.
@@ -132,24 +137,25 @@ func FromEnv(getenv func(string) string) (Settings, error) {
 		MaxRequestBytes: DefaultMaxRequestBytes, Retention: DefaultRetention,
 	}
 	r := reader{getenv: getenv}
-	if v := r.text("SERMO_ADDR"); v != "" {
+	if v := r.env("SERMO_ADDR"); v != "" {
 		s.Addr = v
 	}
-	s.DatabaseURL = r.text("SERMO_DATABASE_URL")
+	s.DatabaseURL = r.env("SERMO_DATABASE_URL")
+	s.DatabasePoolURL = r.env("SERMO_DATABASE_POOL_URL")
 	s.OIDCIssuers = r.urls("SERMO_OIDC_ISSUERS")
 	if v := r.list("SERMO_OIDC_AUDIENCE"); len(v) > 0 {
 		s.OIDCAudiences = v
 	}
-	if v := r.text("SERMO_AUTHORIZER_URL"); v != "" {
+	if v := r.env("SERMO_AUTHORIZER_URL"); v != "" {
 		if u, ok := httpURL(v); ok {
 			s.AuthorizerURL = u
 		} else {
 			r.fail("SERMO_AUTHORIZER_URL", "is not an http or https address")
 		}
 	}
-	s.AuthorizerTokenFile = r.text("SERMO_AUTHORIZER_TOKEN_FILE")
-	s.ServiceKeyFile = r.text("SERMO_SERVICE_KEY_FILE")
-	if v := r.text("SERMO_INSTALLATION_KEY"); v != "" {
+	s.AuthorizerTokenFile = r.env("SERMO_AUTHORIZER_TOKEN_FILE")
+	s.ServiceKeyFile = r.env("SERMO_SERVICE_KEY_FILE")
+	if v := r.env("SERMO_INSTALLATION_KEY"); v != "" {
 		k, err := base64.StdEncoding.DecodeString(v)
 		if err != nil || len(k) != ed25519.PublicKeySize {
 			r.fail("SERMO_INSTALLATION_KEY", "is not an Ed25519 public key in standard base64")
@@ -209,6 +215,9 @@ func (s Settings) refusals() []error {
 	if s.AuthorizerURL != "" && s.AuthorizerTokenFile == "" {
 		errs = append(errs, errors.New("SERMO_AUTHORIZER_TOKEN_FILE is not set: name the file of the bearer SERMO_AUTHORIZER_URL is asked with"))
 	}
+	if s.DatabasePoolURL != "" && s.DatabaseURL == "" {
+		errs = append(errs, errors.New("SERMO_DATABASE_POOL_URL is set and SERMO_DATABASE_URL is not: name the direct endpoint the migrations run over"))
+	}
 	if s.Durable() && s.ServiceKeyFile == "" {
 		errs = append(errs, errors.New("SERMO_SERVICE_KEY_FILE is not set: a server with a database keeps one external sender key for every group it serves"))
 	}
@@ -240,13 +249,16 @@ type reader struct {
 
 func (r *reader) fail(name, why string) { r.errs = append(r.errs, fmt.Errorf("%s %s", name, why)) }
 
-func (r *reader) text(name string) string { return strings.TrimSpace(r.getenv(name)) }
+// env is a variable, trimmed. The database names are read through it
+// by name at the call, which is the read the postgres gate of
+// .lateregate.yaml looks for.
+func (r *reader) env(name string) string { return strings.TrimSpace(r.getenv(name)) }
 
 // list is a comma-separated list, each entry trimmed and empty ones
 // dropped.
 func (r *reader) list(name string) []string {
 	var out []string
-	for entry := range strings.SplitSeq(r.text(name), ",") {
+	for entry := range strings.SplitSeq(r.env(name), ",") {
 		if entry = strings.TrimSpace(entry); entry != "" {
 			out = append(out, entry)
 		}
@@ -269,7 +281,7 @@ func (r *reader) urls(name string) []string {
 }
 
 func (r *reader) size(name string, into *int64) {
-	v := r.text(name)
+	v := r.env(name)
 	if v == "" {
 		return
 	}
@@ -282,7 +294,7 @@ func (r *reader) size(name string, into *int64) {
 }
 
 func (r *reader) duration(name string, into *time.Duration) {
-	v := r.text(name)
+	v := r.env(name)
 	if v == "" {
 		return
 	}

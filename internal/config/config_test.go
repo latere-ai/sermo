@@ -97,6 +97,7 @@ func TestEveryVariable(t *testing.T) {
 	s, err := config.FromEnv(env(map[string]string{
 		"SERMO_ADDR":                  " 127.0.0.1:9000 ",
 		"SERMO_DATABASE_URL":          "postgres://sermo@db.example/sermo",
+		"SERMO_DATABASE_POOL_URL":     " postgres://sermo@pool.example/sermo?default_query_exec_mode=exec ",
 		"SERMO_OIDC_ISSUERS":          " https://one.example/ , ,http://two.example:8443/realm/ ",
 		"SERMO_OIDC_AUDIENCE":         "sermo, plane ,,",
 		"SERMO_AUTHORIZER_URL":        "https://authz.example/decide/",
@@ -114,6 +115,9 @@ func TestEveryVariable(t *testing.T) {
 	}
 	if s.DatabaseURL != "postgres://sermo@db.example/sermo" || !s.Durable() {
 		t.Errorf("DatabaseURL = %q, Durable = %v", s.DatabaseURL, s.Durable())
+	}
+	if s.DatabasePoolURL != "postgres://sermo@pool.example/sermo?default_query_exec_mode=exec" {
+		t.Errorf("DatabasePoolURL = %q", s.DatabasePoolURL)
 	}
 	if want := []string{"https://one.example", "http://two.example:8443/realm"}; !slices.Equal(s.OIDCIssuers, want) {
 		t.Errorf("OIDCIssuers = %q, want %q", s.OIDCIssuers, want)
@@ -175,6 +179,8 @@ func TestProblems(t *testing.T) {
 			[]string{"SERMO_AUTHORIZER_TOKEN_FILE names an empty file"}},
 		{"a database with no service key", map[string]string{"SERMO_DATABASE_URL": "postgres://db.example/sermo"},
 			[]string{"SERMO_SERVICE_KEY_FILE is not set"}},
+		{"a pooled database with no direct one", map[string]string{"SERMO_DATABASE_POOL_URL": "postgres://pool.example/sermo"},
+			[]string{"SERMO_DATABASE_POOL_URL is set and SERMO_DATABASE_URL is not"}},
 		{"a service key file that cannot be read", map[string]string{"SERMO_SERVICE_KEY_FILE": missing(t)},
 			[]string{"SERMO_SERVICE_KEY_FILE names a file that cannot be read"}},
 		{"an empty service key file", map[string]string{"SERMO_SERVICE_KEY_FILE": file(t, "\n")},

@@ -43,3 +43,11 @@ identity:
   # The audience is the default of a server somebody runs themselves; a
   # plane that fronts it verifies an audience of its own.
   reached_by: self-hosted
+
+# The store's migrations hold a session-scoped lock across their statements,
+# which a transaction-mode pooler loses between transactions, so they run over
+# the direct endpoint, SERMO_DATABASE_URL, and the serving path opens
+# SERMO_DATABASE_POOL_URL where an installation names a pooled one.
+postgres:
+  role: pooled
+  prefix: SERMO
