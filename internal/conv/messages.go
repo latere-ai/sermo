@@ -76,6 +76,8 @@ func (s *Service) Send(ctx context.Context, w Who, id string, in Send) (*Sent, e
 
 func (s *Service) check(ctx context.Context, w Who, c *store.Conversation, info *mls.MessageInfo, in Send) (*store.Append, error) {
 	switch {
+	case !c.Has(w.Person): // no one else sends anything, so no one else learns how a message fares
+		return nil, apierr.New(apierr.CodeForbidden, "the caller is not one of the conversation's people")
 	case info.Epoch < c.Epoch && info.WireFormat == mls.WireFormatPrivateMessage:
 		return nil, apierr.New(apierr.CodeWrongEpoch, fmt.Sprintf("the conversation is at epoch %d", c.Epoch))
 	case info.Epoch < c.Epoch:
@@ -390,15 +392,20 @@ func (s *Service) Messages(ctx context.Context, w Who, id string, after int64, l
 			return page, err
 		}
 		t := time.NewTimer(deadline.Sub(s.now()))
+		expired := false
 		select {
 		case <-ch:
 		case <-t.C:
+			expired = true
 		case <-ctx.Done():
 		}
 		t.Stop()
 		s.hub.forget(id, ch)
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if expired { // the wait ends with its timer, whatever the clock says
+			return s.page(ctx, w, id, after, limit)
 		}
 	}
 }

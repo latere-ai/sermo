@@ -187,6 +187,9 @@ func (s *Service) putRecord(ctx context.Context, w Who, r messaging.DeviceRecord
 	if err != nil {
 		return false, err
 	}
+	if d, _ := messaging.NewDirectory(w.Person, records, revocations, nil); d.Revoked(r.SignatureKey) {
+		return false, apierr.New(apierr.CodeExists, "a revoked key is not registered again")
+	}
 	rest := records[:0:0]
 	fresh = true
 	for _, old := range records {
@@ -206,9 +209,6 @@ func (s *Service) putRecord(ctx context.Context, w Who, r messaging.DeviceRecord
 		return false, apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d records", messaging.MaxRecords))
 	}
 	d, _ := messaging.NewDirectory(w.Person, append(rest, r), revocations, nil)
-	if d.Revoked(r.SignatureKey) {
-		return false, apierr.New(apierr.CodeExists, "a revoked key is not registered again")
-	}
 	if !stands(d) {
 		return false, apierr.New(apierr.CodeInvalid, "the record does not verify against the caller's records")
 	}
