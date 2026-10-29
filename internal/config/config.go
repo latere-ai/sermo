@@ -12,8 +12,10 @@ package config
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -57,7 +59,7 @@ type Settings struct {
 	// 32-byte seed in standard base64. Without a database a fresh key is
 	// made at start.
 	ServiceKeyFile string // SERMO_SERVICE_KEY_FILE
-	ServiceKey     ed25519.PrivateKey
+	ServiceKey     Key
 
 	// InstallationKey is the Ed25519 public key that attests the
 	// assistant's member, in standard base64. Empty admits no assistant.
@@ -81,14 +83,45 @@ func (s Secret) Reveal() string { return s.value }
 
 const redacted = "[redacted]"
 
-// String keeps %v from printing the value.
+// String keeps the value out of anything that prints the secret.
 func (s Secret) String() string { return redacted }
 
 // GoString keeps %#v from printing the value.
 func (s Secret) GoString() string { return redacted }
 
+// Format keeps every verb, %d and %x among them, from printing the value.
+func (s Secret) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, redacted) }
+
 // LogValue keeps a structured log line from printing the value.
 func (s Secret) LogValue() slog.Value { return slog.StringValue(redacted) }
+
+// MarshalJSON keeps an encoded value of the settings from carrying it.
+func (s Secret) MarshalJSON() ([]byte, error) { return json.Marshal(redacted) }
+
+// Key is a private key read from a file, which prints as a placeholder
+// the way a Secret does.
+type Key struct{ key ed25519.PrivateKey }
+
+// NewKey wraps a private key.
+func NewKey(k ed25519.PrivateKey) Key { return Key{key: k} }
+
+// Private is the key; nil when none was read.
+func (k Key) Private() ed25519.PrivateKey { return k.key }
+
+// String keeps the key out of anything that prints it.
+func (k Key) String() string { return redacted }
+
+// GoString keeps %#v from printing the key.
+func (k Key) GoString() string { return redacted }
+
+// Format keeps every verb from printing the key.
+func (k Key) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, redacted) }
+
+// LogValue keeps a structured log line from printing the key.
+func (k Key) LogValue() slog.Value { return slog.StringValue(redacted) }
+
+// MarshalJSON keeps an encoded value of the settings from carrying it.
+func (k Key) MarshalJSON() ([]byte, error) { return json.Marshal(redacted) }
 
 // FromEnv reads the settings. getenv is os.Getenv, or a test's own.
 // Every problem is reported, each naming its variable and never its
@@ -128,27 +161,40 @@ func FromEnv(getenv func(string) string) (Settings, error) {
 	r.duration("SERMO_RETENTION", &s.Retention)
 
 	r.errs = append(r.errs, s.refusals()...)
+	// The files are read with the rest, so a bad file is reported with
+	// every other problem.
+	if s.AuthorizerURL != "" && s.AuthorizerTokenFile != "" {
+		token, err := readSecret("SERMO_AUTHORIZER_TOKEN_FILE", s.AuthorizerTokenFile)
+		if err != nil {
+			r.errs = append(r.errs, err)
+		}
+		s.AuthorizerToken = token
+	}
+	if s.ServiceKeyFile != "" {
+		key, err := readKey("SERMO_SERVICE_KEY_FILE", s.ServiceKeyFile)
+		if err != nil {
+			r.errs = append(r.errs, err)
+		}
+		s.ServiceKey = key
+	}
 	if len(r.errs) > 0 {
 		return Settings{}, errors.Join(r.errs...)
 	}
-	var err error
-	if s.AuthorizerURL != "" {
-		if s.AuthorizerToken, err = readSecret("SERMO_AUTHORIZER_TOKEN_FILE", s.AuthorizerTokenFile); err != nil {
-			return Settings{}, err
-		}
-	}
-	if s.ServiceKeyFile != "" {
-		seed, err := readSecret("SERMO_SERVICE_KEY_FILE", s.ServiceKeyFile)
-		if err != nil {
-			return Settings{}, err
-		}
-		b, err := base64.StdEncoding.DecodeString(seed.Reveal())
-		if err != nil || len(b) != ed25519.SeedSize {
-			return Settings{}, errors.New("SERMO_SERVICE_KEY_FILE does not hold a 32-byte Ed25519 seed in standard base64")
-		}
-		s.ServiceKey = ed25519.NewKeyFromSeed(b)
-	}
 	return s, nil
+}
+
+// readKey reads an Ed25519 key from the seed its file holds in standard
+// base64. The error names the variable, never the content.
+func readKey(name, path string) (Key, error) {
+	seed, err := readSecret(name, path)
+	if err != nil {
+		return Key{}, err
+	}
+	b, err := base64.StdEncoding.DecodeString(seed.Reveal())
+	if err != nil || len(b) != ed25519.SeedSize {
+		return Key{}, fmt.Errorf("%s does not hold a 32-byte Ed25519 seed in standard base64", name)
+	}
+	return NewKey(ed25519.NewKeyFromSeed(b)), nil
 }
 
 // refusals are the settings a server cannot start with.
@@ -159,6 +205,9 @@ func (s Settings) refusals() []error {
 	}
 	if s.AuthorizerURL == "" && s.AuthorizerTokenFile != "" {
 		errs = append(errs, errors.New("SERMO_AUTHORIZER_TOKEN_FILE is set and SERMO_AUTHORIZER_URL is not: name the endpoint the bearer is for"))
+	}
+	if s.AuthorizerURL != "" && s.AuthorizerTokenFile == "" {
+		errs = append(errs, errors.New("SERMO_AUTHORIZER_TOKEN_FILE is not set: name the file of the bearer SERMO_AUTHORIZER_URL is asked with"))
 	}
 	if s.Durable() && s.ServiceKeyFile == "" {
 		errs = append(errs, errors.New("SERMO_SERVICE_KEY_FILE is not set: a server with a database keeps one external sender key for every group it serves"))
@@ -172,9 +221,6 @@ func (s Settings) refusals() []error {
 // readSecret reads a secret from its file, once. The error names the
 // variable, never the content.
 func readSecret(name, path string) (Secret, error) {
-	if path == "" {
-		return Secret{}, fmt.Errorf("%s is not set", name)
-	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Secret{}, fmt.Errorf("%s names a file that cannot be read", name)

@@ -8,6 +8,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -15,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,7 +127,7 @@ func TestEveryVariable(t *testing.T) {
 	if s.AuthorizerTokenFile != tokenFile || s.AuthorizerToken.Reveal() != token {
 		t.Errorf("AuthorizerTokenFile = %q, the token read is not the file's trimmed content", s.AuthorizerTokenFile)
 	}
-	if s.ServiceKeyFile != keyFile || !s.ServiceKey.Equal(ed25519.NewKeyFromSeed(seedBytes)) {
+	if s.ServiceKeyFile != keyFile || !s.ServiceKey.Private().Equal(ed25519.NewKeyFromSeed(seedBytes)) {
 		t.Errorf("ServiceKeyFile = %q, the key read is not the one of the file's seed", s.ServiceKeyFile)
 	}
 	if !bytes.Equal(s.InstallationKey, installation) {
@@ -291,38 +294,79 @@ func TestErrorsNameTheVariableNotTheValue(t *testing.T) {
 	}
 }
 
-// TestSecretIsRedacted checks that a secret prints as a placeholder
-// through every way a log line formats a value, alone and as a field of
-// the settings, and that Reveal still gives the value.
+// TestSecretIsRedacted checks that a secret and the service key print as
+// a placeholder through every way a log line formats a value, alone and
+// as fields of the settings, and that Reveal and Private still give
+// them.
 func TestSecretIsRedacted(t *testing.T) {
 	value := "canary-" + rand.Text()
 	s := config.NewSecret(value)
 	if s.Reveal() != value {
 		t.Fatalf("Reveal = %q, want the value wrapped", s.Reveal())
 	}
-	settings := config.Settings{AuthorizerToken: s}
-	var printed []string
-	for _, verb := range []string{"%v", "%+v", "%s", "%q", "%#v"} {
-		printed = append(printed, fmt.Sprintf(verb, s), fmt.Sprintf(verb, settings), fmt.Sprintf(verb, &settings))
+	priv := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))
+	k := config.NewKey(priv)
+	if !k.Private().Equal(priv) {
+		t.Fatal("Private is not the key wrapped")
 	}
-	printed = append(printed, s.String(), s.GoString(), fmt.Sprint(s), fmt.Sprintln(s))
+	// What a printed key would show: its bytes as numbers, in hex, or in
+	// base64.
+	numbers := make([]string, len(priv))
+	for i, b := range priv {
+		numbers[i] = strconv.Itoa(int(b))
+	}
+	leaks := []string{value, strings.Join(numbers, " "), hex.EncodeToString(priv), strings.ToUpper(hex.EncodeToString(priv)), base64.StdEncoding.EncodeToString(priv)}
+	settings := config.Settings{AuthorizerToken: s, ServiceKey: k}
+	var printed []string
+	for _, verb := range []string{"%v", "%+v", "%s", "%q", "%#v", "%d", "%x", "%X", "%08v"} {
+		printed = append(printed, fmt.Sprintf(verb, s), fmt.Sprintf(verb, k), fmt.Sprintf(verb, settings), fmt.Sprintf(verb, &settings))
+	}
+	printed = append(printed, s.String(), s.GoString(), k.String(), k.GoString(), fmt.Sprint(s, k), fmt.Sprintln(s, k))
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	printed = append(printed, string(encoded))
 	for _, p := range printed {
-		if strings.Contains(p, value) {
-			t.Errorf("the secret printed: %s", p)
+		for _, leak := range leaks {
+			if strings.Contains(p, leak) {
+				t.Errorf("a secret printed: %s", p)
+			}
 		}
 		if !strings.Contains(p, "[redacted]") {
-			t.Errorf("the secret printed without its placeholder: %s", p)
+			t.Errorf("a secret printed without its placeholder: %s", p)
 		}
 	}
 	var text, js bytes.Buffer
-	slog.New(slog.NewTextHandler(&text, nil)).Info("start", slog.Any("token", s), slog.Group("settings", slog.Any("token", s)))
-	slog.New(slog.NewJSONHandler(&js, nil)).Info("start", slog.Any("token", s), slog.Group("settings", slog.Any("token", s)))
+	slog.New(slog.NewTextHandler(&text, nil)).Info("start", slog.Any("token", s), slog.Any("key", k), slog.Any("settings", settings))
+	slog.New(slog.NewJSONHandler(&js, nil)).Info("start", slog.Any("token", s), slog.Any("key", k), slog.Any("settings", settings))
 	for _, line := range []string{text.String(), js.String()} {
-		if strings.Contains(line, value) {
-			t.Errorf("a log line printed the secret: %s", line)
+		for _, leak := range leaks {
+			if strings.Contains(line, leak) {
+				t.Errorf("a log line printed a secret: %s", line)
+			}
 		}
-		if strings.Count(line, "[redacted]") != 2 {
-			t.Errorf("a log line printed the secret without its placeholder: %s", line)
+		if strings.Count(line, "[redacted]") != 4 {
+			t.Errorf("a log line printed a secret without its placeholder: %s", line)
+		}
+	}
+}
+
+// TestBothFilesReported checks that a bad token file and a bad key file
+// are reported together.
+func TestBothFilesReported(t *testing.T) {
+	_, err := config.FromEnv(env(map[string]string{
+		"SERMO_AUTHORIZER_URL":        "https://authz.example",
+		"SERMO_AUTHORIZER_TOKEN_FILE": missing(t),
+		"SERMO_SERVICE_KEY_FILE":      file(t, "not base64!"),
+	}))
+	if err == nil {
+		t.Fatal("FromEnv accepted two bad files")
+	}
+	for _, w := range []string{"SERMO_AUTHORIZER_TOKEN_FILE names a file that cannot be read",
+		"SERMO_SERVICE_KEY_FILE does not hold a 32-byte Ed25519 seed in standard base64"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("error %q does not say %q", err, w)
 		}
 	}
 }
