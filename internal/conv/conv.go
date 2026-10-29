@@ -156,7 +156,7 @@ func (s *Service) directory(ctx context.Context, person string) (*messaging.Dire
 	if err != nil {
 		return nil, err
 	}
-	d, _ := messaging.NewDirectory(person, records, revocations)
+	d, _ := messaging.NewDirectory(person, records, revocations, nil)
 	return d, nil
 }
 
@@ -205,7 +205,7 @@ func (s *Service) putRecord(ctx context.Context, w Who, r messaging.DeviceRecord
 	if fresh && len(records) >= messaging.MaxRecords {
 		return false, apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d records", messaging.MaxRecords))
 	}
-	d, _ := messaging.NewDirectory(w.Person, append(rest, r), revocations)
+	d, _ := messaging.NewDirectory(w.Person, append(rest, r), revocations, nil)
 	if d.Revoked(r.SignatureKey) {
 		return false, apierr.New(apierr.CodeExists, "a revoked key is not registered again")
 	}
@@ -256,10 +256,14 @@ func (s *Service) Devices(ctx context.Context, w Who, person string) (*Directory
 	return &Directory{Records: records, Revocations: revocations}, nil
 }
 
-// Revoke keeps a revocation one of the caller's records signed. The
-// revoked device's key packages and transfer go, and Sermo proposes the
-// removal of every leaf with the revoked key from every conversation of
-// the caller's.
+// Revoke keeps a revocation one of the caller's records signed, under
+// the root of the key it revokes, when it changes what stands; one that
+// changes nothing is not kept, so a person's revocations stay within
+// messaging.MaxRevocations. The revoked device's key packages and
+// transfer go, and Sermo proposes the removal of every leaf with the
+// revoked key from every conversation of the caller's, again on a
+// revocation that changes nothing, so a person whose earlier proposals
+// failed can ask again.
 func (s *Service) Revoke(ctx context.Context, w Who, v messaging.Revocation) error {
 	if v.Person != w.Person {
 		return apierr.New(apierr.CodeInvalid, "the revocation is of a key of the caller")
@@ -268,12 +272,10 @@ func (s *Service) Revoke(ctx context.Context, w Who, v messaging.Revocation) err
 	if err != nil {
 		return err
 	}
-	if len(revocations) >= messaging.MaxRecords {
-		return apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d revocations", messaging.MaxRecords))
-	}
-	d, _ := messaging.NewDirectory(w.Person, records, append(revocations, v))
-	if !slices.ContainsFunc(d.Revocations(), func(o messaging.Revocation) bool { return bytes.Equal(o.Signature, v.Signature) }) {
-		return apierr.New(apierr.CodeInvalid, "the revocation is not signed by a record of the caller's")
+	d, _ := messaging.NewDirectory(w.Person, records, revocations, nil)
+	changes, err := d.CheckRevocation(v)
+	if err != nil {
+		return apierr.Wrap(apierr.CodeInvalid, err)
 	}
 	device := ""
 	for _, r := range records {
@@ -284,8 +286,13 @@ func (s *Service) Revoke(ctx context.Context, w Who, v messaging.Revocation) err
 	if err := s.ask(ctx, w, authorizer.ActionDeviceDelete, device, map[string]any{authorizer.FieldPerson: w.Person}); err != nil {
 		return err
 	}
-	if err := s.store.AddRevocation(ctx, v, device); err != nil {
-		return err
+	if changes {
+		if len(revocations) >= messaging.MaxRevocations {
+			return apierr.New(apierr.CodeTooLarge, fmt.Sprintf("a person has at most %d revocations", messaging.MaxRevocations))
+		}
+		if err := s.store.AddRevocation(ctx, v, device); err != nil {
+			return err
+		}
 	}
 	return s.proposeRemovals(ctx, w.Person, v.Key)
 }
@@ -579,7 +586,8 @@ func (s *Service) Create(ctx context.Context, w Who, id string, groupInfo []byte
 	if _, err := messaging.LatereIdentity(id); err != nil {
 		return nil, apierr.New(apierr.CodeInvalid, "a conversation id is 1 to 128 of A-Z, a-z, 0-9, '.', '_', '~' and '-'")
 	}
-	view, err := mls.NewPublicGroup(groupInfo, mls.JoinOptions{}, messaging.Config())
+	policy := s.policy(ctx)
+	view, err := mls.NewPublicGroup(groupInfo, mls.JoinOptions{}, policy.Config())
 	if err != nil {
 		return nil, apierr.Wrap(apierr.CodeInvalid, err)
 	}
@@ -610,12 +618,11 @@ func (s *Service) Create(ctx context.Context, w Who, id string, groupInfo []byte
 	case !carriesTreeAndKey(groupInfo, view):
 		return nil, apierr.New(apierr.CodeInvalid, "the group info carries the ratchet tree and the external public key")
 	}
-	d, err := s.directory(ctx, w.Person)
-	if err != nil {
+	if err := policy.CheckJoin(view); err != nil {
+		if errors.Is(err, messaging.ErrRefused) {
+			return nil, apierr.Wrap(apierr.CodeInvalid, err)
+		}
 		return nil, err
-	}
-	if err := d.CheckMember(members[0]); err != nil {
-		return nil, apierr.Wrap(apierr.CodeInvalid, err)
 	}
 	c := store.Conversation{ID: id, Kind: st.Kind, Level: st.Level, People: st.People, Owners: st.Owners, GroupInfo: groupInfo,
 		Members: []store.Member{{Person: w.Person, Device: w.Device}}}

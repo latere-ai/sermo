@@ -199,11 +199,8 @@ func (e *env) newDevice(person, name string) *device {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	rec, err := messaging.NewDeviceRecord(person, name, key, enc.PublicKey())
+	rec, err := messaging.NewDeviceRecord(person, name, key, enc.PublicKey(), nil)
 	if err != nil {
-		e.t.Fatal(err)
-	}
-	if err := rec.Sign(name, key); err != nil {
 		e.t.Fatal(err)
 	}
 	d := &device{e: e, person: person, id: id, token: e.issuer.Mint(issuertest.Claims{Sub: person}), key: key, enc: enc,
@@ -239,7 +236,7 @@ func (d *device) policy() *messaging.Policy {
 		if a := d.call("GET", "/people/"+person+"/devices", nil, &list); a.status != http.StatusOK {
 			return nil, fmt.Errorf("directory of %s: %d %s", person, a.status, a.code)
 		}
-		dir, _ := messaging.NewDirectory(person, list.Records, list.Revocations)
+		dir, _ := messaging.NewDirectory(person, list.Records, list.Revocations, nil)
 		return dir, nil
 	}}
 }
@@ -337,7 +334,7 @@ func (d *device) join(conversation string) messaging.HistoryRange {
 	if kp.kp == nil {
 		d.e.t.Fatal("the Welcome is for no key package of the device's")
 	}
-	if d.group, err = mls.JoinGroup(w.Welcome, kp.kp, kp.secrets, d.signer, mls.JoinOptions{}, d.policy().Config()); err != nil {
+	if d.group, err = d.policy().JoinGroup(w.Welcome, kp.kp, kp.secrets, d.signer, mls.JoinOptions{}); err != nil {
 		d.e.t.Fatal(err)
 	}
 	n, err := messaging.ParseCommitNotice(w.Notice)
