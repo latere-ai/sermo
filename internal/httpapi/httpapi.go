@@ -161,8 +161,8 @@ func (a *API) serve(rt route, r *http.Request) (int, any, error) {
 func writeJSON(w http.ResponseWriter, log *slog.Logger, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
-		apierr.Write(w, apierr.Internal(err))
-		log.Error("encoding a response", slog.Any("cause", err))
+		e := apierr.Write(w, apierr.Internal(err))
+		log.Error("encoding a response", slog.String("code", e.Code), slog.Any("cause", err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -222,18 +222,6 @@ func (r *reader) urls(name string) []string {
 	return out
 }
 
-func (r *reader) flag(name string) bool {
-	v := r.text(name)
-	if v == "" {
-		return false
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		r.fail(name, "is not true or false")
-	}
-	return b
-}
-
 func (r *reader) size(name string, into *int64) {
 	v := r.text(name)
 	if v == "" {

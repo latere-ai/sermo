@@ -438,7 +438,7 @@ func TestConversation(t *testing.T) {
 
 	// Messages cross.
 	sent := alice.say(id, canary)
-	got, next := bob.catchUp(id, 0)
+	got, _ := bob.catchUp(id, 0)
 	if len(got) != 1 || got[0].Text != canary {
 		t.Fatalf("bob read %+v", got)
 	}
@@ -471,7 +471,8 @@ func TestConversation(t *testing.T) {
 	if a := alice.call("POST", "/conversations/"+id+"/messages", httpapi.SendBody{Message: stale.Message(), GroupInfo: stale.GroupInfo()}, nil); a.code != "epoch_taken" {
 		t.Fatalf("a commit for a taken epoch: %+v", a)
 	}
-	if _, next = alice.catchUp(id, sent.Seq); next <= sent.Seq {
+	_, next := alice.catchUp(id, sent.Seq)
+	if next <= sent.Seq {
 		t.Fatal("alice read nothing after her message")
 	}
 
