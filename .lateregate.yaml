@@ -31,3 +31,15 @@ spec:
     - Acceptance criteria
   require_section_by_status:
     complete: [Outcome]
+
+# The identity shape of an open core (specs/003-identity-and-authorization.md):
+# sermod verifies one token against the issuer it is given, hands every
+# claim to the authorizer it asks, and reads none of them.
+identity:
+  role: core
+  audience: sermo
+  config_prefix: SERMO
+  api_group: sermo
+  # The audience is the default of a server somebody runs themselves; a
+  # plane that fronts it verifies an audience of its own.
+  reached_by: self-hosted
