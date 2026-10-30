@@ -6,6 +6,8 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+## v0.1.0 - 2026-10-30
+
 ### Added
 
 - **The first release of `sermod`,** the server for end-to-end
