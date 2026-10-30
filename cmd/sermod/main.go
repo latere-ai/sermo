@@ -34,6 +34,7 @@ import (
 	"latere.ai/x/sermo/internal/store"
 	"latere.ai/x/sermo/internal/store/memory"
 	"latere.ai/x/sermo/internal/store/postgres"
+	"latere.ai/x/sermo/internal/version"
 )
 
 // Timing of a start and a stop. On a stop, readiness answers 503 at
@@ -82,9 +83,9 @@ func runWith(ctx context.Context, args []string, getenv func(string) string, std
 		_, _ = fmt.Fprintln(stderr, "sermod: takes no arguments; it reads its settings from SERMO_* variables")
 		return 2
 	}
-	version := otel.Version("")
+	release := otel.Version(version.Version)
 	if *showVersion {
-		_, _ = fmt.Fprintln(stdout, version)
+		_, _ = fmt.Fprintln(stdout, release)
 		return 0
 	}
 	settings, err := config.FromEnv(getenv)
@@ -94,7 +95,7 @@ func runWith(ctx context.Context, args []string, getenv func(string) string, std
 
 	logger, flush, err := otel.Bootstrap(ctx, otel.Config{
 		ServiceName: "sermod",
-		Version:     version,
+		Version:     release,
 		Stdout:      slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}),
 	})
 	if err != nil {
@@ -121,7 +122,7 @@ func runWith(ctx context.Context, args []string, getenv func(string) string, std
 	if err != nil {
 		return fail(stderr, fmt.Errorf("SERMO_ADDR: %w", err))
 	}
-	_, _ = fmt.Fprintf(stdout, "sermod: %s listening on %s store=%s authorizer=%s\n", version, ln.Addr(), srv.storeKind, srv.authorizerKind)
+	_, _ = fmt.Fprintf(stdout, "sermod: %s listening on %s store=%s authorizer=%s\n", release, ln.Addr(), srv.storeKind, srv.authorizerKind)
 
 	sweepDone := make(chan struct{})
 	go func() {
@@ -206,7 +207,7 @@ func build(ctx context.Context, s config.Settings, logger *slog.Logger) (*server
 			health.Check{Name: "store", Run: func(ctx context.Context) error { return ping(ctx, st) }},
 		),
 		Timeout: readyTimeout,
-		Version: otel.Version(""),
+		Version: otel.Version(version.Version),
 	})
 	mux := http.NewServeMux()
 	mux.Handle(httpapi.Prefix+"/", otel.Handler(api, "sermo"))

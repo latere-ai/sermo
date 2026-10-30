@@ -34,6 +34,7 @@ import (
 	"latere.ai/x/sermo/internal/store"
 	"latere.ai/x/sermo/internal/store/memory"
 	"latere.ai/x/sermo/internal/store/postgres"
+	"latere.ai/x/sermo/internal/version"
 )
 
 // syncBuffer is a buffer two goroutines write and read.
@@ -79,6 +80,18 @@ func TestUsage(t *testing.T) {
 	var stdout bytes.Buffer
 	if code := run(t.Context(), []string{"-version"}, env(nil), &stdout, io.Discard); code != 0 || strings.TrimSpace(stdout.String()) == "" {
 		t.Errorf("-version: exit %d, printed %q", code, stdout.String())
+	}
+}
+
+// A release the linker stamps is the version -version prints, which the
+// release pipeline compares with the tag.
+func TestStampedVersion(t *testing.T) {
+	old := version.Version
+	t.Cleanup(func() { version.Version = old })
+	version.Version = "v9.8.7"
+	var stdout bytes.Buffer
+	if code := run(t.Context(), []string{"-version"}, env(nil), &stdout, io.Discard); code != 0 || stdout.String() != "v9.8.7\n" {
+		t.Errorf("-version: exit %d, printed %q, want the stamped v9.8.7", code, stdout.String())
 	}
 }
 
