@@ -12,7 +12,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
-	latere.ai/x/ci-gate v0.56.0
+	latere.ai/x/ci-gate v0.59.1
 	latere.ai/x/pkg v0.110.1
 	latere.ai/x/sdk-go v0.15.0
 )
