@@ -6,6 +6,8 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+## v0.1.1 - 2026-11-01
+
 ### Fixed
 
 - **A waiting read gets a new message within a second on every replica.**
