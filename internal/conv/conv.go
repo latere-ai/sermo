@@ -51,6 +51,10 @@ const (
 	DefaultListLimit = 50
 	// MaxWait is the longest a read of messages waits for one.
 	MaxWait = 30 * time.Second
+	// ReadRecheck is how often a waiting read looks at the store, and so
+	// the longest a message takes to reach a read held by another
+	// replica than the one it arrived at.
+	ReadRecheck = time.Second
 )
 
 // ServiceIdentity is the identity of Sermo's credential as the groups'
@@ -723,7 +727,9 @@ func (s *Service) Membership(ctx context.Context, w Who, id, person string) (boo
 }
 
 // hub wakes the reads that wait on a conversation's next message. It is
-// in the process: a read waits on the replica its message arrives at.
+// in the process, so it reaches only the reads on the replica a message
+// arrives at; a read held by another replica finds the message at its
+// next ReadRecheck.
 type hub struct {
 	mu      sync.Mutex
 	waiters map[string][]chan struct{}

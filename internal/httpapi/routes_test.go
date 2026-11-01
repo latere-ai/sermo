@@ -428,8 +428,27 @@ func TestConversationRoutes(t *testing.T) {
 		if len(waited.Messages) != 1 {
 			t.Fatalf("the wait returned %+v", waited)
 		}
+		last = waited.Next
 	case <-time.After(4 * time.Second):
 		t.Fatal("a waiting read did not wake on a new message")
+	}
+	// A read held by another replica sees the message too, though only
+	// the replica it arrived at can wake its own reads.
+	other := e.replica()
+	go func() {
+		var waited httpapi.MessageList
+		other.call("GET", fmt.Sprintf("/conversations/%s/messages?after=%d&wait=5", id, last), bob.token, bob.id.Device, nil, &waited)
+		done <- waited
+	}()
+	time.Sleep(100 * time.Millisecond)
+	alice.say(id, "on the other replica")
+	select {
+	case waited := <-done:
+		if len(waited.Messages) != 1 {
+			t.Fatalf("the wait on the other replica returned %+v", waited)
+		}
+	case <-time.After(3 * conv.ReadRecheck):
+		t.Fatal("a read on another replica did not see a new message")
 	}
 	// A read whose caller goes away while it waits ends with it.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)

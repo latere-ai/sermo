@@ -6,6 +6,13 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+### Fixed
+
+- **A waiting read gets a new message within a second on every replica.**
+  A read held by a replica other than the one the message arrived at used
+  to wait out its whole timeout, up to 30 seconds. With more than one
+  replica running, about half of all messages arrived that late.
+
 ### Changed
 
 - **Releases are built, signed and published by the shared release stages

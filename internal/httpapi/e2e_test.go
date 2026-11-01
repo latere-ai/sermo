@@ -43,6 +43,8 @@ type env struct {
 	seen   bytes.Buffer
 	logs   *syncBuffer
 	svc    *conv.Service
+	opts   options
+	key    ed25519.PrivateKey
 }
 
 type syncBuffer struct {
@@ -83,6 +85,18 @@ func newEnv(t *testing.T, opts ...option) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return serve(t, o, issuer, key)
+}
+
+// replica starts a second sermod over the same store and issuer, the way
+// a second replica runs beside the first.
+func (e *env) replica() *env {
+	e.t.Helper()
+	return serve(e.t, e.opts, e.issuer, e.key)
+}
+
+func serve(t *testing.T, o options, issuer *issuertest.Server, key ed25519.PrivateKey) *env {
+	t.Helper()
 	svc, err := conv.New(conv.Options{Store: o.store, Authorizer: o.authorizer, ServiceKey: key, Now: o.now})
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +111,7 @@ func newEnv(t *testing.T, opts ...option) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, srv: httptest.NewServer(api), issuer: issuer, logs: logs, svc: svc}
+	e := &env{t: t, srv: httptest.NewServer(api), issuer: issuer, logs: logs, svc: svc, opts: o, key: key}
 	t.Cleanup(e.srv.Close)
 	return e
 }

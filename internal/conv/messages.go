@@ -375,6 +375,10 @@ func (s *Service) Messages(ctx context.Context, w Who, id string, after int64, l
 	}
 	wait = min(max(wait, 0), MaxWait)
 	deadline := s.now().Add(wait)
+	timeout := time.NewTimer(wait)
+	defer timeout.Stop()
+	recheck := time.NewTicker(ReadRecheck)
+	defer recheck.Stop()
 	for {
 		ch := s.hub.wait(id)
 		page, err := s.page(ctx, w, id, after, limit)
@@ -382,15 +386,14 @@ func (s *Service) Messages(ctx context.Context, w Who, id string, after int64, l
 			s.hub.forget(id, ch)
 			return page, err
 		}
-		t := time.NewTimer(deadline.Sub(s.now()))
 		expired := false
 		select {
 		case <-ch:
-		case <-t.C:
+		case <-recheck.C:
+		case <-timeout.C:
 			expired = true
 		case <-ctx.Done():
 		}
-		t.Stop()
 		s.hub.forget(id, ch)
 		if err := ctx.Err(); err != nil {
 			return nil, err
