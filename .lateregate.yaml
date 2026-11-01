@@ -51,3 +51,22 @@ identity:
 postgres:
   role: pooled
   prefix: SERMO
+
+# The server image is built, started and probed the way production runs it.
+image:
+  images:
+    - name: sermod
+      build_args:
+        VERSION: v0.0.0-candidate
+      version_args: [-version]
+      version_expect: v0.0.0-candidate
+      max_mib: 40
+      # The memory store and an issuer that is never asked: the probes need
+      # no token, and an issuer that does not answer at start is named and
+      # the server starts, after reading its key set for up to 10 seconds,
+      # which the 30 seconds below cover.
+      env:
+        SERMO_OIDC_ISSUERS: https://issuer.example.com
+      port: 8080
+      probe: /livez
+      wait_seconds: 30

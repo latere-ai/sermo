@@ -1,6 +1,5 @@
 # Every push to main and every pull request runs the gate, the shared
-# pipeline of latere-ai/ci, and the checks that need the tree and nothing
-# else. Every third-party action is pinned by commit.
+# pipeline of latere-ai/ci.
 name: verify
 on:
   push:
@@ -27,59 +26,3 @@ jobs:
     with:
       runs_on: ubuntu-latest
       test_os: '["ubuntu-latest"]'
-
-  tidy:
-    name: go.mod and go.sum are tidy
-    if: "!startsWith(github.ref, 'refs/tags/')"
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          # The runner keeps its module cache between runs; restoring a
-          # tarball over it fails on every file that exists.
-          cache: false
-      - run: go mod tidy -diff
-
-  # The server image on every push: it builds, it names the release it was
-  # stamped as, it stays small, it has no shell, and it starts and answers
-  # with a read-only root file system and no capability.
-  image:
-    name: the server image builds, starts and stays small
-    if: "!startsWith(github.ref, 'refs/tags/')"
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker build --build-arg VERSION=v0.0.0-candidate -t sermod:candidate .
-      - name: The image reports the version it was stamped as
-        run: |
-          got=$(docker run --rm sermod:candidate -version)
-          [ "$got" = "v0.0.0-candidate" ] || { echo "the image reports '$got', not the stamped v0.0.0-candidate" >&2; exit 1; }
-      - name: The image is under 40 MiB and holds no shell
-        run: |
-          size=$(docker image inspect sermod:candidate --format '{{.Size}}')
-          echo "the image is ${size} bytes"
-          [ "${size}" -lt $((40 * 1024 * 1024)) ] || { echo "the server image is over 40 MiB" >&2; exit 1; }
-          if docker run --rm --entrypoint /bin/sh sermod:candidate -c true 2>/dev/null; then
-            echo "the server image holds a shell" >&2; exit 1
-          fi
-      - name: The image starts and answers with a read-only root file system
-        # The memory store and an issuer that is never asked: the probes
-        # need no token, and an issuer that does not answer at start is
-        # named and the server starts, after reading its key set for up to
-        # 10 seconds, which the 30 seconds below cover.
-        run: |
-          docker run -d --name sermod --read-only --cap-drop ALL \
-            -e SERMO_OIDC_ISSUERS=https://issuer.example.com \
-            -p 127.0.0.1:8080:8080 sermod:candidate
-          for _ in $(seq 1 150); do
-            if curl -fsS http://127.0.0.1:8080/livez > /dev/null; then
-              echo "the server answers"; exit 0
-            fi
-            sleep 0.2
-          done
-          docker logs sermod
-          echo "the server did not answer" >&2; exit 1
