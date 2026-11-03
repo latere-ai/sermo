@@ -32,3 +32,4 @@ flowchart LR
 | 001 | [Architecture](001-architecture.md) | large | drafted | |
 | 002 | [API](002-api.md) | large | drafted | 001 |
 | 003 | [Identity and authorization](003-identity-and-authorization.md) | medium | drafted | 001, 002 |
+| 004 | [Backup records](004-backup-records.md) | medium | drafted | 001, 002, 003 |

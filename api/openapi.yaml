@@ -825,6 +825,112 @@ paths:
           $ref: "#/components/responses/Internal"
         "503":
           $ref: "#/components/responses/AuthorizerUnavailable"
+  /v1/messaging/conversations/{id}/backup:
+    post:
+      operationId: putBackupRecords
+      tags: [Backup]
+      summary: Store sealed records of your history in a conversation
+      description: >-
+        Stores records of the caller's history of a conversation, each one
+        message sealed by the caller's device under the person's backup key.
+        The server cannot open them and sees their sizes and ids. A record
+        whose `id` is stored already is left as it is, so two devices of the
+        person store a message's record once, and a call sent again changes
+        nothing. A person's records of all conversations hold at most
+        268435456 bytes. The retention of the log does not delete them. The
+        caller must be, or have been, one of the conversation's people.
+        Authorized as `backup.recovery`.
+      parameters:
+        - $ref: "#/components/parameters/Conversation"
+        - $ref: "#/components/parameters/DeviceRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupPut"
+      responses:
+        "200":
+          description: How many of the records were new.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupStored"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: >-
+            `invalid`: no record is sent; a record's `id` is empty or over 64
+            characters, or its `sealed` is empty. `unknown_field`: the body
+            has a member this one does not.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the caller
+            is not, and never was, one of the conversation's people, or the
+            authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: no conversation has this id."
+        "413":
+          $ref: "#/components/responses/TooLarge"
+          description: >-
+            `too_large`: the body is over the server's bound; a call carries
+            more than 20 records; a record is over 266304 bytes; or the
+            records would take the person past 268435456 bytes in all.
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
+    get:
+      operationId: listBackupRecords
+      tags: [Backup]
+      summary: List your sealed records of a conversation
+      description: >-
+        Answers the caller's own records of a conversation, for a device that
+        holds the backup key to open. Each record has a `cursor`, its place
+        in the order it was stored. With `order` oldest, the default, the
+        answer is the records after `cursor`, oldest first; with newest, the
+        records before `cursor`, newest first, where a `cursor` of 0 starts
+        at the newest. `next` is set when the page is full: pass it as
+        `cursor` to read on, and stop at an answer with no records. Authorized
+        as `backup.recovery`.
+      parameters:
+        - $ref: "#/components/parameters/Conversation"
+        - $ref: "#/components/parameters/BackupCursor"
+        - $ref: "#/components/parameters/BackupOrder"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/DeviceRequired"
+      responses:
+        "200":
+          description: A page of the caller's records.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupList"
+        "400":
+          $ref: "#/components/responses/BadQuery"
+          description: >-
+            `invalid`: `cursor` or `limit` is not a number in its range, or
+            `order` is not oldest or newest.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: >-
+            `not_your_device`: the `Sermo-Device` header is missing or names
+            no device of the caller's that stands. `forbidden`: the caller
+            is not, and never was, one of the conversation's people, or the
+            authorizer refused.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`not_found`: no conversation has this id."
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          $ref: "#/components/responses/AuthorizerUnavailable"
   /v1/messaging/welcomes:
     get:
       operationId: listWelcomes
@@ -993,6 +1099,26 @@ components:
       description: The `next` of the previous page; absent for the first.
       schema:
         type: string
+    BackupCursor:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        The `cursor` to read from: 0, or absent, for the start, and the
+        `next` of the previous answer after that.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    BackupOrder:
+      name: order
+      in: query
+      required: false
+      description: Whether the page is the oldest records after the cursor or the newest before it.
+      schema:
+        type: string
+        enum: [oldest, newest]
+        default: oldest
     MessagesAfter:
       name: after
       in: query
@@ -1622,6 +1748,69 @@ components:
             The sequence number to read after next time: the last one this
             answer passed, including messages of epochs the device may not
             read, or `after` itself when there were none.
+    BackupRecord:
+      type: object
+      required: [id, sealed]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: >-
+            The id the person's devices derived for the record, 1 to 64
+            characters; the same message gives the same id on every device.
+        sealed:
+          $ref: "#/components/schemas/Bytes"
+          description: The record sealed under the backup key, 1 to 266304 bytes.
+    BackupPut:
+      type: object
+      required: [records]
+      additionalProperties: false
+      properties:
+        records:
+          type: array
+          description: The records to store, 1 to 20.
+          items:
+            $ref: "#/components/schemas/BackupRecord"
+    BackupStored:
+      type: object
+      required: [added]
+      properties:
+        added:
+          type: integer
+          minimum: 0
+          description: How many of the records were not stored before.
+    StoredBackupRecord:
+      type: object
+      required: [id, sealed, cursor, created]
+      properties:
+        id:
+          type: string
+          description: The record's id.
+        sealed:
+          $ref: "#/components/schemas/Bytes"
+          description: The record as it was sealed.
+        cursor:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The record's place in the order it was stored.
+        created:
+          type: string
+          format: date-time
+          description: When the server stored it.
+    BackupList:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/StoredBackupRecord"
+        next:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The `cursor` to read on from; set only when the page is full.
     Welcome:
       type: object
       required: [id, conversation, seq, welcome, created]

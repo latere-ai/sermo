@@ -103,6 +103,8 @@ func (a *API) routes() []route {
 		{"GET", "/conversations/{id}/group-info", asDevice, a.groupInfo},
 		{"POST", "/conversations/{id}/messages", asDevice, a.send},
 		{"GET", "/conversations/{id}/messages", asDevice, a.messages},
+		{"POST", "/conversations/{id}/backup", asDevice, a.putBackup},
+		{"GET", "/conversations/{id}/backup", asDevice, a.backup},
 		{"GET", "/welcomes", asDevice, a.welcomes},
 		{"DELETE", "/welcomes/{id}", asDevice, a.deleteWelcome},
 		{"GET", "/conversations/{id}/people/{person}", anyCaller, a.membership},
@@ -337,6 +339,40 @@ type MessageList struct {
 	Messages []Message `json:"messages"`
 	// Next is the sequence number to read after next.
 	Next int64 `json:"next"`
+}
+
+// BackupRecord is one sealed record of the caller's history: the id the
+// caller's devices derived for it and the record under their backup key.
+type BackupRecord struct {
+	ID     string `json:"id"`
+	Sealed []byte `json:"sealed"`
+}
+
+// BackupPut is the records a device stores.
+type BackupPut struct {
+	Records []BackupRecord `json:"records"`
+}
+
+// BackupStored says how many of the records were new.
+type BackupStored struct {
+	Added int `json:"added"`
+}
+
+// StoredBackupRecord is a record as it is listed, with the cursor the
+// server gave it.
+type StoredBackupRecord struct {
+	ID      string    `json:"id"`
+	Sealed  []byte    `json:"sealed"`
+	Cursor  int64     `json:"cursor"`
+	Created time.Time `json:"created"`
+}
+
+// BackupList is a page of the caller's records of a conversation.
+type BackupList struct {
+	Records []StoredBackupRecord `json:"records"`
+	// Next is the cursor of the next page; it is set only when this one is
+	// full, and the next may be empty.
+	Next int64 `json:"next,omitempty"`
 }
 
 // Welcome is one Welcome for the calling device.
@@ -578,4 +614,54 @@ func (a *API) membership(ctx context.Context, w conv.Who, r *http.Request) (int,
 		return 0, nil, err
 	}
 	return http.StatusOK, Membership{Person: person, Member: member}, nil
+}
+
+func (a *API) putBackup(ctx context.Context, w conv.Who, r *http.Request) (int, any, error) {
+	var b BackupPut
+	if err := decode(r, &b); err != nil {
+		return 0, nil, err
+	}
+	in := make([]conv.BackupRecord, 0, len(b.Records))
+	for _, x := range b.Records {
+		in = append(in, conv.BackupRecord{ID: x.ID, Sealed: x.Sealed})
+	}
+	n, err := a.svc.PutBackup(ctx, w, r.PathValue("id"), in)
+	if err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, BackupStored{Added: n}, nil
+}
+
+func (a *API) backup(ctx context.Context, w conv.Who, r *http.Request) (int, any, error) {
+	cursor, err := query(r, "cursor", 0, 1<<62)
+	if err != nil {
+		return 0, nil, err
+	}
+	limit, err := query(r, "limit", conv.DefaultListLimit, conv.MaxListLimit)
+	if err != nil {
+		return 0, nil, err
+	}
+	if limit == 0 {
+		limit = conv.DefaultListLimit
+	}
+	var newest bool
+	switch r.URL.Query().Get("order") {
+	case "", "oldest":
+	case "newest":
+		newest = true
+	default:
+		return 0, nil, apierr.New(apierr.CodeInvalid, "order is oldest or newest")
+	}
+	recs, err := a.svc.Backup(ctx, w, r.PathValue("id"), cursor, newest, int(limit))
+	if err != nil {
+		return 0, nil, err
+	}
+	out := BackupList{Records: []StoredBackupRecord{}}
+	for _, x := range recs {
+		out.Records = append(out.Records, StoredBackupRecord{ID: x.ID, Sealed: x.Sealed, Cursor: x.Seq, Created: x.Created})
+	}
+	if int64(len(recs)) == limit {
+		out.Next = recs[len(recs)-1].Seq
+	}
+	return http.StatusOK, out, nil
 }

@@ -85,6 +85,8 @@ The vocabulary, which the package `authorizer` declares once:
   `key_package.claim`, the person claimed for, with the `conversation`
   the claim is for. `root` says a device registers as a new root, with
   no voucher among the person's records.
+- `backup.recovery` is also asked by storing and listing the backup
+  records of a conversation, with the caller as `person`.
 - `asked_by` is the person an answer posted as the assistant answers.
 
 A deny is answered `403 forbidden`, with the authorizer's reason in the

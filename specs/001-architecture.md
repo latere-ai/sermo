@@ -26,8 +26,9 @@ sealed.
 Sermo is one binary, `sermod`, with Postgres for the directory, the log
 and the groups' public state, an OpenID Connect issuer for identity and
 an HTTP authorizer for every decision. It keeps no file: what devices
-seal for a conversation, its attachments and history bundles, and each
-person's backup, is in a storage service the plane runs. It reimplements nothing of MLS: it parses and checks
+seal for a conversation, its attachments and history bundles, is in a
+storage service the plane runs. It keeps each person's backup records as
+rows, small ciphertext only the person reads. It reimplements nothing of MLS: it parses and checks
 what devices send with `latere.ai/x/sdk-go/mls`, and applies the
 conversation rules of `latere.ai/x/sdk-go/messaging`, the package every
 device applies, so a commit the server accepts is a commit every honest
@@ -62,6 +63,7 @@ flowchart LR
 | Key packages | Each device's pool of one-time key packages and its last resort | The key packages' secrets |
 | Log | Every message of a conversation, numbered in one sequence; one commit per epoch, the first to arrive; the group's public state after each commit; the latest group info | A message's plaintext |
 | Recovery | Each person's recovery record and wrapped backup key, and a backup key sealed to a new device until it fetches it | A key that opens them |
+| Backup records | Each person's sealed record of each message, by conversation and id, in the order stored (specs/004-backup-records.md) | The backup key, or a record's plaintext |
 | The assistant's member | Its MLS state per conversation, sealed under a data key of that conversation, while the level is not Off | Its state after the level is Off: the data key is destroyed first |
 
 ### The profile
@@ -160,16 +162,18 @@ or post.
 4. The assistant's member decrypts only for a caller the authorizer
    allows, and turning it off destroys its data key before anything
    else.
-5. Sermo keeps no file. A device seals each attachment, history bundle
-   and backup record and keeps the ciphertext in a storage service the
-   plane runs, which asks Sermo, through `conversation.membership`,
-   whether a reader is one of a conversation's people.
+5. Sermo keeps no file. A device seals each attachment and history
+   bundle and keeps the ciphertext in a storage service the plane runs,
+   which asks Sermo, through `conversation.membership`, whether a reader
+   is one of a conversation's people. Backup records are the exception:
+   each is small, read by its owner alone, and needs an order Sermo
+   assigns, so Sermo keeps them (specs/004-backup-records.md).
 
 ## Acceptance criteria
 
 1. A message's plaintext planted as a canary is found in no log line,
    response or table after a conversation is created, written in,
-   shared into and backed up.
+   shared into and backed up, a backup record among them.
 2. A commit `messaging.Policy.CheckCommit` refuses is answered
    `422 refused` and changes nothing.
 3. Two commits for one epoch: the first is accepted, the second is

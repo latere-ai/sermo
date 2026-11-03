@@ -73,7 +73,9 @@ const (
 	ActionKeyPackageClaim = "key_package.claim"
 
 	// ActionBackupRecovery is asked by registering and reading the
-	// recovery record and the wrapped backup key.
+	// recovery record and the wrapped backup key, and by storing and
+	// reading the backup records of a person's history, all of them a
+	// person's own.
 	ActionBackupRecovery = "backup.recovery"
 )
 

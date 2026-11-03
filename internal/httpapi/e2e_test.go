@@ -68,10 +68,11 @@ func (s *syncBuffer) String() string {
 type option func(*options)
 
 type options struct {
-	authorizer access.Authorizer
-	store      store.Store
-	maxBytes   int64
-	now        func() time.Time
+	authorizer  access.Authorizer
+	store       store.Store
+	maxBytes    int64
+	now         func() time.Time
+	backupBytes int64
 }
 
 func newEnv(t *testing.T, opts ...option) *env {
@@ -97,7 +98,7 @@ func (e *env) replica() *env {
 
 func serve(t *testing.T, o options, issuer *issuertest.Server, key ed25519.PrivateKey) *env {
 	t.Helper()
-	svc, err := conv.New(conv.Options{Store: o.store, Authorizer: o.authorizer, ServiceKey: key, Now: o.now})
+	svc, err := conv.New(conv.Options{Store: o.store, Authorizer: o.authorizer, ServiceKey: key, Now: o.now, BackupBytes: o.backupBytes})
 	if err != nil {
 		t.Fatal(err)
 	}

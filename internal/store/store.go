@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package store is what sermod keeps: the directory of devices, the
-// recovery records, the key packages, and each conversation with its
+// recovery records, the backup records of each person's history, the key packages, and each conversation with its
 // group's public state, its ordered log and the welcomes it filed. It
 // holds ciphertext and public state only. Two implementations meet one
 // contract, which package storetest drives: memory for a trial and the
@@ -27,6 +27,9 @@ var (
 	// ErrConflict is an append whose conversation changed since its
 	// caller read it.
 	ErrConflict = errors.New("store: the conversation changed")
+	// ErrFull is a write of backup records that would take a person over
+	// their limit of stored bytes.
+	ErrFull = errors.New("store: the person's backup is full")
 )
 
 // Store is the contract of both implementations. Every method is safe
@@ -70,6 +73,19 @@ type Store interface {
 	// has neither.
 	ClaimKeyPackage(ctx context.Context, person, device string) (KeyPackage, error)
 
+	// PutBackupRecords stores sealed backup records of a person's
+	// conversation, in one transaction. A record whose id is stored
+	// already is left as it is: two devices of a person write a message's
+	// record once. It says how many were new. ErrFull, and nothing
+	// stored, when the person's records would pass limit bytes.
+	PutBackupRecords(ctx context.Context, person, conversation string, records []BackupRecord, limit int64) (added int, err error)
+	// BackupRecords lists a person's records of a conversation by the
+	// place the store gave them: after cursor, oldest first, or, when
+	// newest is set, before cursor, newest first, where a cursor of 0
+	// starts at the newest. At most limit of them, and none when limit is
+	// below one.
+	BackupRecords(ctx context.Context, person, conversation string, cursor int64, newest bool, limit int) ([]BackupRecord, error)
+
 	// CreateConversation stores a new conversation with its first state,
 	// at seq 0 and version 0 whatever it is handed: like its times, they
 	// are the store's. ErrExists when the id is taken.
@@ -110,6 +126,19 @@ type Store interface {
 // what it is given and calls nothing of the store's. The records and
 // revocations are its own to change. A nil check writes.
 type DirectoryCheck func(records []messaging.DeviceRecord, revocations []messaging.Revocation) (write bool, err error)
+
+// BackupRecord is one sealed record of a person's history in a
+// conversation: ciphertext under a key only the person's devices hold, with
+// the id they derived for it.
+type BackupRecord struct {
+	ID string
+	// Sealed is the record as the device sealed it.
+	Sealed []byte
+	// Seq is the record's place among the person's records of the
+	// conversation, which the store sets when it stores the record.
+	Seq     int64
+	Created time.Time
+}
 
 // KeyPackage is one key package of a device.
 type KeyPackage struct {

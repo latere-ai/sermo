@@ -48,6 +48,9 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		{"DirectoryRevocationRace", testDirectoryRevocationRace},
 		{"DirectoryWritesOfBothKinds", testDirectoryWritesOfBothKinds},
 		{"Recovery", testRecovery},
+		{"BackupRecords", testBackupRecords},
+		{"BackupLimit", testBackupLimit},
+		{"BackupKeptThroughTheSweep", testBackupKeptThroughTheSweep},
 		{"Transfer", testTransfer},
 		{"TransferTakenOnce", testTransferTakenOnce},
 		{"KeyPackages", testKeyPackages},
@@ -343,6 +346,102 @@ func testRecovery(t *testing.T, s store.Store) {
 
 // testTransfer checks that a transfer is left per device, replaced by
 // the next, and taken once.
+func backupRecords(ids ...string) []store.BackupRecord {
+	var out []store.BackupRecord
+	for _, id := range ids {
+		out = append(out, store.BackupRecord{ID: id, Sealed: fake("sealed record", id)})
+	}
+	return out
+}
+
+func backupIDs(rs []store.BackupRecord) string {
+	return strings.Join(each(rs, func(r store.BackupRecord) string { return r.ID }), ",")
+}
+
+// testBackupRecords checks that records are kept once by id for each
+// person and conversation, read back by the order they were stored in,
+// oldest after a cursor or newest before it, and that one person's are
+// not another's.
+func testBackupRecords(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	n, err := s.PutBackupRecords(ctx, "person-a", "conv-1", backupRecords("m1", "m2", "m3"), 1<<20)
+	must(t, err, "PutBackupRecords")
+	checkf(t, n == 3, "PutBackupRecords added %d, want 3", n)
+	again := backupRecords("m2", "m4")
+	again[0].Sealed = []byte("a second sealing")
+	n, err = s.PutBackupRecords(ctx, "person-a", "conv-1", again, 1<<20)
+	must(t, err, "PutBackupRecords with one stored already")
+	checkf(t, n == 1, "PutBackupRecords added %d, want only m4", n)
+	_, err = s.PutBackupRecords(ctx, "person-b", "conv-1", backupRecords("m1"), 1<<20)
+	must(t, err, "PutBackupRecords of another person")
+	_, err = s.PutBackupRecords(ctx, "person-a", "conv-2", backupRecords("m1"), 1<<20)
+	must(t, err, "PutBackupRecords of another conversation")
+
+	got, err := s.BackupRecords(ctx, "person-a", "conv-1", 0, false, 10)
+	must(t, err, "BackupRecords")
+	checkf(t, backupIDs(got) == "m1,m2,m3,m4", "BackupRecords = %s, want m1,m2,m3,m4", backupIDs(got))
+	checkf(t, bytes.Equal(got[1].Sealed, fake("sealed record", "m2")), "the first sealing of m2 was replaced")
+	checkf(t, got[0].Seq < got[1].Seq && got[1].Seq < got[2].Seq && !got[0].Created.IsZero(), "the records' places do not rise: %v", each(got, func(r store.BackupRecord) int64 { return r.Seq }))
+
+	page, err := s.BackupRecords(ctx, "person-a", "conv-1", got[0].Seq, false, 2)
+	must(t, err, "BackupRecords after a cursor")
+	checkf(t, backupIDs(page) == "m2,m3", "after the first, two: %s, want m2,m3", backupIDs(page))
+	newest, err := s.BackupRecords(ctx, "person-a", "conv-1", 0, true, 3)
+	must(t, err, "BackupRecords newest")
+	checkf(t, backupIDs(newest) == "m4,m3,m2", "newest three: %s, want m4,m3,m2", backupIDs(newest))
+	rest, err := s.BackupRecords(ctx, "person-a", "conv-1", newest[2].Seq, true, 3)
+	must(t, err, "BackupRecords newest before a cursor")
+	checkf(t, backupIDs(rest) == "m1", "before m2: %s, want m1", backupIDs(rest))
+	none, err := s.BackupRecords(ctx, "person-a", "conv-1", 0, false, 0)
+	must(t, err, "BackupRecords with no room")
+	checkf(t, len(none) == 0, "a limit of 0 listed %s", backupIDs(none))
+	b, err := s.BackupRecords(ctx, "person-b", "conv-1", 0, false, 10)
+	must(t, err, "BackupRecords of person-b")
+	checkf(t, backupIDs(b) == "m1", "person-b read %s, want only their own m1", backupIDs(b))
+	empty, err := s.BackupRecords(ctx, "person-c", "conv-1", 0, false, 10)
+	must(t, err, "BackupRecords of someone with none")
+	checkf(t, len(empty) == 0, "someone with none read %s", backupIDs(empty))
+	got[0].Sealed[0] ^= 0xff
+	again2, err := s.BackupRecords(ctx, "person-a", "conv-1", 0, false, 1)
+	must(t, err, "BackupRecords after a caller changed what it got")
+	checkf(t, bytes.Equal(again2[0].Sealed, fake("sealed record", "m1")), "a caller changed what the store holds")
+}
+
+// testBackupLimit checks that a person's records stop at the limit in
+// bytes, and a write that would pass it stores nothing, and that records
+// stored before count: a record already there adds nothing.
+func testBackupLimit(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	one := int64(len(fake("sealed record", "m1")))
+	_, err := s.PutBackupRecords(ctx, "person-a", "conv-1", backupRecords("m1", "m2"), 3*one)
+	must(t, err, "PutBackupRecords within the limit")
+	_, err = s.PutBackupRecords(ctx, "person-a", "conv-2", backupRecords("m3", "m4"), 3*one)
+	checkf(t, errors.Is(err, store.ErrFull), "PutBackupRecords past the limit: err = %v, want ErrFull", err)
+	got, err := s.BackupRecords(ctx, "person-a", "conv-2", 0, false, 10)
+	must(t, err, "BackupRecords")
+	checkf(t, len(got) == 0, "a refused write stored %s", backupIDs(got))
+	n, err := s.PutBackupRecords(ctx, "person-a", "conv-1", backupRecords("m1", "m2"), 3*one)
+	must(t, err, "PutBackupRecords of records stored already, at the limit")
+	checkf(t, n == 0, "records stored already added %d", n)
+	_, err = s.PutBackupRecords(ctx, "person-a", "conv-2", backupRecords("m3"), 3*one)
+	must(t, err, "PutBackupRecords up to the limit")
+	_, err = s.PutBackupRecords(ctx, "person-b", "conv-1", backupRecords("m1", "m2", "m3"), 3*one)
+	must(t, err, "PutBackupRecords of another person, who has their own")
+}
+
+// testBackupKeptThroughTheSweep checks that the retention sweep leaves
+// backup records alone: they are what outlives the log.
+func testBackupKeptThroughTheSweep(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	_, err := s.PutBackupRecords(ctx, "person-a", "conv-1", backupRecords("m1"), 1<<20)
+	must(t, err, "PutBackupRecords")
+	_, err = s.DeleteMessagesBefore(ctx, time.Now().Add(time.Hour))
+	must(t, err, "DeleteMessagesBefore")
+	got, err := s.BackupRecords(ctx, "person-a", "conv-1", 0, false, 10)
+	must(t, err, "BackupRecords")
+	checkf(t, backupIDs(got) == "m1", "after the sweep: %s, want m1", backupIDs(got))
+}
+
 func testTransfer(t *testing.T, s store.Store) {
 	ctx := t.Context()
 	_, err := s.TakeTransfer(ctx, "person-a", "dev-b")

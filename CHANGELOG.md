@@ -6,6 +6,20 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+## v0.2.0 - 2026-11-03
+
+### Added
+
+- **A person's history is kept as sealed records, so a new device reads
+  it.** `POST /v1/messaging/conversations/{id}/backup` stores records
+  that a person's devices sealed under their backup key, one for each
+  message, and `GET` on the same path lists a person's own records of the
+  conversation, oldest after a cursor or newest before it. A record the
+  person's devices store twice is kept once. The server sees ciphertext,
+  sizes and ids alone; one person's records hold at most 256 MiB, and the
+  retention of the log never deletes them. Both calls are authorized as
+  `backup.recovery`. Needs the database migration 000005.
+
 ## v0.1.1 - 2026-11-01
 
 ### Fixed

@@ -178,6 +178,20 @@ func (f *faults) Messages(ctx context.Context, id string, after int64, limit int
 	return f.inner.Messages(ctx, id, after, limit)
 }
 
+func (f *faults) PutBackupRecords(ctx context.Context, person, conversation string, records []store.BackupRecord, limit int64) (int, error) {
+	if err := f.tick(); err != nil {
+		return 0, err
+	}
+	return f.inner.PutBackupRecords(ctx, person, conversation, records, limit)
+}
+
+func (f *faults) BackupRecords(ctx context.Context, person, conversation string, cursor int64, newest bool, limit int) ([]store.BackupRecord, error) {
+	if err := f.tick(); err != nil {
+		return nil, err
+	}
+	return f.inner.BackupRecords(ctx, person, conversation, cursor, newest, limit)
+}
+
 func (f *faults) Welcomes(ctx context.Context, person, device string) ([]store.Welcome, error) {
 	if err := f.tick(); err != nil {
 		return nil, err
@@ -260,6 +274,10 @@ func TestStoreFaults(t *testing.T) {
 		{"membership", func() answer { return alice.call("GET", "/conversations/"+id+"/people/bob", nil, nil) }},
 		{"messages", func() answer { return alice.call("GET", "/conversations/"+id+"/messages", nil, nil) }},
 		{"welcomes", func() answer { return alice.call("GET", "/welcomes", nil, nil) }},
+		{"store backup", func() answer {
+			return alice.call("POST", "/conversations/"+id+"/backup", httpapi.BackupPut{Records: []httpapi.BackupRecord{{ID: "r1", Sealed: []byte("sealed, opaque here")}}}, nil)
+		}},
+		{"read backup", func() answer { return alice.call("GET", "/conversations/"+id+"/backup", nil, nil) }},
 		{"say", func() answer {
 			return alice.call("POST", "/conversations/"+id+"/messages", httpapi.SendBody{Message: alice.seal("through a failing store")}, nil)
 		}},

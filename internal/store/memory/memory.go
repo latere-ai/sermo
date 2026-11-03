@@ -31,6 +31,11 @@ type Store struct {
 	convs     map[string]*store.Conversation
 	log       map[string][]store.Message
 	welcomes  []store.Welcome
+	// backup is each person's records of each conversation, in the order
+	// they were stored, and backupBytes what each person's hold.
+	backup      map[[2]string][]store.BackupRecord
+	backupBytes map[string]int64
+	backupSeq   int64
 }
 
 // New returns an empty store. now is the clock; nil takes time.Now.
@@ -43,6 +48,7 @@ func New(now func() time.Time) *Store {
 		recovery:  map[string][]byte{},
 		transfers: map[[2]string][]byte{}, packages: map[[2]string][]store.KeyPackage{}, resorts: map[[2]string]store.KeyPackage{},
 		convs: map[string]*store.Conversation{}, log: map[string][]store.Message{},
+		backup: map[[2]string][]store.BackupRecord{}, backupBytes: map[string]int64{},
 	}
 }
 
@@ -191,6 +197,66 @@ func (s *Store) TakeTransfer(_ context.Context, person, device string) ([]byte, 
 	}
 	delete(s.transfers, k)
 	return sealed, nil
+}
+
+// PutBackupRecords stores backup records, keeping the first of an id.
+func (s *Store) PutBackupRecords(_ context.Context, person, conversation string, records []store.BackupRecord, limit int64) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := [2]string{person, conversation}
+	have := map[string]bool{}
+	for _, r := range s.backup[k] {
+		have[r.ID] = true
+	}
+	var fresh []store.BackupRecord
+	var size int64
+	for _, r := range records {
+		if have[r.ID] {
+			continue
+		}
+		have[r.ID] = true
+		r.Sealed = bytes.Clone(r.Sealed)
+		fresh = append(fresh, r)
+		size += int64(len(r.Sealed))
+	}
+	if s.backupBytes[person]+size > limit {
+		return 0, store.ErrFull
+	}
+	for _, r := range fresh {
+		s.backupSeq++
+		r.Seq, r.Created = s.backupSeq, s.now().UTC()
+		s.backup[k] = append(s.backup[k], r)
+	}
+	s.backupBytes[person] += size
+	return len(fresh), nil
+}
+
+// BackupRecords lists backup records by the place they were stored at.
+func (s *Store) BackupRecords(_ context.Context, person, conversation string, cursor int64, newest bool, limit int) ([]store.BackupRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit < 1 {
+		return nil, nil
+	}
+	all := s.backup[[2]string{person, conversation}]
+	var out []store.BackupRecord
+	if newest {
+		for i := len(all) - 1; i >= 0 && len(out) < limit; i-- {
+			if cursor == 0 || all[i].Seq < cursor {
+				out = append(out, all[i])
+			}
+		}
+	} else {
+		for _, r := range all {
+			if r.Seq > cursor && len(out) < limit {
+				out = append(out, r)
+			}
+		}
+	}
+	for i := range out {
+		out[i].Sealed = bytes.Clone(out[i].Sealed)
+	}
+	return out, nil
 }
 
 // AddKeyPackages adds key packages.

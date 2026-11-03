@@ -45,6 +45,13 @@ const (
 	// MaxSealedBytes is the largest wrapped backup key or sealed
 	// transfer.
 	MaxSealedBytes = 4 << 10
+	// MaxBackupRecordBytes is the largest sealed backup record: a
+	// message of the largest size, and the seal around it.
+	MaxBackupRecordBytes = MaxMessageBytes + 64
+	// MaxBackupBatch is how many records one store call carries.
+	MaxBackupBatch = 20
+	// MaxBackupBytes is what one person's backup records hold in all.
+	MaxBackupBytes = 256 << 20
 	// MaxListLimit is the most one page of a list holds, and
 	// DefaultListLimit the size of a page that names none.
 	MaxListLimit     = 200
@@ -69,6 +76,8 @@ type Service struct {
 	install    ed25519.PublicKey
 	now        func() time.Time
 	hub        hub
+	// backupLimit is what one person's backup records hold in all.
+	backupLimit int64
 }
 
 // Options build a Service.
@@ -81,6 +90,9 @@ type Options struct {
 	// admits none.
 	Installation ed25519.PublicKey
 	Now          func() time.Time
+	// BackupBytes is what one person's backup records hold in all; 0
+	// takes MaxBackupBytes.
+	BackupBytes int64
 }
 
 // New builds the service.
@@ -96,8 +108,12 @@ func New(o Options) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
+	limit := o.BackupBytes
+	if limit <= 0 {
+		limit = MaxBackupBytes
+	}
 	return &Service{store: o.Store, authorizer: o.Authorizer, signer: signer, install: o.Installation, now: now,
-		hub: hub{waiters: map[string][]chan struct{}{}}}, nil
+		hub: hub{waiters: map[string][]chan struct{}{}}, backupLimit: limit}, nil
 }
 
 // ExternalSender is Sermo as each group names it: the one sender from
