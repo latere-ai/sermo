@@ -6,6 +6,8 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+## v0.2.0 - 2026-11-03
+
 ### Added
 
 - **A person's history is kept as sealed records, so a new device reads
