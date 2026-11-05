@@ -1,44 +1,26 @@
-# Every push to main and every pull request runs the gate, the shared
-# pipeline of latere-ai/ci.
-name: verify
+name: ci
 
-# A push or pull request that changes only specs or markdown starts no run,
-# because no build or test reads them. The exception is specs/003-identity-and-
-# authorization.md, whose action table a test holds to the authorizer.
-# `lateregate release` runs the whole bar, the spec tree included, before every
-# tag. A tag is never filtered by paths.
+# The bar lives in latere-ai/ci-gate, pinned in go.mod, and the shared
+# workflow runs it. What this repository decides is in .lateregate.yaml.
+# `lateregate init` writes this file, the same in every repository.
 on:
   push:
     branches: [main]
-    tags: ['v*']
-    paths:
-      - "**"
-      - "!specs/**"
-      - "!**.md"
-      - "specs/003-identity-and-authorization.md"
   pull_request:
-    paths:
-      - "**"
-      - "!specs/**"
-      - "!**.md"
-      - "specs/003-identity-and-authorization.md"
   workflow_dispatch:
 
 # A newer push to the same ref supersedes this run: its commit carries every
-# change this one would verify, and the runner is better spent on it.
+# change this one would verify.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+# actions: read lets the gate find the last commit whose CI passed, which it
+# measures the change from.
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  # Every job runs on a hosted runner, as Pons's do, so the repository can
-  # turn public at its first release without moving a job.
   gate:
-    if: "!startsWith(github.ref, 'refs/tags/')"
     uses: latere-ai/ci/.github/workflows/lateregate.yml@v1
-    with:
-      runs_on: ubuntu-latest
-      test_os: '["ubuntu-latest"]'
