@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Latere AI
+# SPDX-License-Identifier: Apache-2.0
+#
+# A local OpenID Connect issuer for trying sermod on one machine: Dex with
+# one user, alice@example.com with the password "password", and one client
+# whose id is sermo, the audience sermod accepts by default. For a local
+# run only; docs/local.md starts it.
+issuer: http://127.0.0.1:5556/dex
+storage:
+  type: memory
+web:
+  http: 0.0.0.0:5556
+oauth2:
+  passwordConnector: local
+enablePasswordDB: true
+staticPasswords:
+  - email: alice@example.com
+    # bcrypt of "password"
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: alice
+    userID: alice
+staticClients:
+  - id: sermo
+    name: Sermo
+    secret: local-client-secret
+    redirectURIs: ["http://127.0.0.1:5555/callback"]
