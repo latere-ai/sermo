@@ -305,7 +305,7 @@ func TestProdNamesTheImageTheDeployPins(t *testing.T) {
 // TestProdSelectsOnlyItsOwnPods: a rollout identity may write an object that
 // selects its own service's Pods and no other's, so every selector at the
 // top of a policy in deploy/prod names sermod. The policy that selects
-// platformd's Pods is in deploy/bootstrap.
+// platformd's Pods is platform's, in latere-ai/platform deploy/prod.
 func TestProdSelectsOnlyItsOwnPods(t *testing.T) {
 	text := read(t, "deploy/prod/networkpolicy.yaml")
 	_, afterSpec, ok := strings.Cut(text, "\nspec:\n  podSelector:\n    matchLabels:\n")
@@ -317,9 +317,6 @@ func TestProdSelectsOnlyItsOwnPods(t *testing.T) {
 	}
 	if n := strings.Count(text, "\nkind: NetworkPolicy\n"); n != 1 {
 		t.Errorf("deploy/prod/networkpolicy.yaml holds %d policies, want the core's alone", n)
-	}
-	if !strings.Contains(read(t, "deploy/bootstrap/networkpolicy-platformd-tls.yaml"), "      app: platformd\n") {
-		t.Error("deploy/bootstrap does not hold the policy that admits the core to platformd")
 	}
 }
 

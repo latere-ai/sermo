@@ -10,7 +10,7 @@
 #   migrations and 25061 for the pool;
 # - platformd's internal TLS listener, pod port 8443 behind the Service's
 #   443, for every decision; platformd's side admits the core in
-#   sermod-platformd-tls, which deploy/bootstrap holds;
+#   sermod-platformd-tls, which platform's deploy/prod holds;
 # - auth at https://auth.latere.ai, for its discovery and key set: a public
 #   name this cluster serves, whose address inside the cluster is the load
 #   balancer's, which Cilium translates to the ingress controller's Pods

@@ -11,10 +11,9 @@ is no migration Job to run before a release. The Secrets the Deployment
 reads (`sermo-db`, `sermod-authorizer`, `sermod-service-key` and
 `platformd-internal-ca`) are created outside this tree and keep their names.
 
-`networkpolicy-platformd-tls.yaml` admits the core's Pods to platformd's
-internal TLS listener. It selects platformd's Pods and not the core's, which
-a rollout identity may not write, so an operator applies it with
-`kubectl apply -f deploy/bootstrap/networkpolicy-platformd-tls.yaml`.
+The policy that admits the core's Pods to platformd's internal TLS listener,
+`sermod-platformd-tls`, is applied by platform's release
+(`latere-ai/platform`, `deploy/prod`). No operator step remains for it.
 
 ## The rollout identity
 
