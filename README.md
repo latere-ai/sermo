@@ -20,7 +20,8 @@ Identity comes from any OpenID Connect issuer. Permission comes from an
 endpoint you write.
 
 This repository is the whole service, `sermod`, and anyone can run it.
-It is being written; nothing is released yet.
+Versions are `v*` tags, and [CHANGELOG.md](CHANGELOG.md) says what each
+one changed.
 
 ```mermaid
 flowchart LR
