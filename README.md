@@ -20,9 +20,9 @@ This repository is the whole server, `sermod`, and anyone can run it.
 
 ## Status
 
-The latest release is [v0.2.0](CHANGELOG.md#v020---2026-11-03). Before
-1.0, a minor release may change the API under `/v1/messaging`, and the
-[changelog](CHANGELOG.md) names every change.
+Sermo is before 1.0: a minor release may change the API under
+`/v1/messaging`, and the [changelog](CHANGELOG.md) names every change in
+each [release](https://github.com/latere-ai/sermo/releases).
 
 Sermo has had no external security audit, and neither has the MLS code
 it and its clients run. [Security](SECURITY.md#audit) says what has
