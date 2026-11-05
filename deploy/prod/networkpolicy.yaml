@@ -1,0 +1,86 @@
+# What reaches the core, and what it reaches, and only that.
+#
+# In: the ingress controller, which routes /v1/messaging, on the one port.
+# platformd asks the core nothing yet; its question whether a person is one
+# of a conversation's people, for a read in Storage, adds its Pods here.
+#
+# Out:
+# - the resolver;
+# - the database, DigitalOcean's managed Postgres, on 25060 for the
+#   migrations and 25061 for the pool;
+# - platformd's internal TLS listener, pod port 8443 behind the Service's
+#   443, for every decision; platformd's side admits the core in
+#   sermod-platformd-tls, which deploy/bootstrap holds;
+# - auth at https://auth.latere.ai, for its discovery and key set: a public
+#   name this cluster serves, whose address inside the cluster is the load
+#   balancer's, which Cilium translates to the ingress controller's Pods
+#   before policy is evaluated, so those Pods on their https port are
+#   admitted;
+# - the collector the namespace's monitoring injects, dialed at the node's
+#   address on a host port that Cilium translates to the collector's Pod on
+#   4318.
+# Nothing outside the cluster: the core calls no other service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sermod
+  labels:
+    app.kubernetes.io/name: sermod
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sermod
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 25060
+          protocol: TCP
+        - port: 25061
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: platformd
+      ports:
+        - port: 8443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: dash0-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+      ports:
+        - port: 4318
+          protocol: TCP

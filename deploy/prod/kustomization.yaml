@@ -1,0 +1,39 @@
+# The production target: the Sermo core as Latere runs it, behind the
+# capability Messaging. It is declared in .lateregate.yaml under both
+# identity.skip and identity.overlays, so the gate's no-latere-value rule
+# reads the addresses set here rather than refusing them.
+#
+# Everything here is safe to re-apply, because the release pipeline applies
+# it on every release with `kubectl apply -k deploy/prod` and then sets the
+# image to the digest it built. A resource that cannot be re-applied belongs
+# in deploy/bootstrap/, which the pipeline never reads.
+#
+# The Secrets sermo-db, sermod-authorizer, sermod-service-key and
+# platformd-internal-ca are created outside the tree and keep their names.
+# The ConfigMap is generated here, so a change of a setting renames it and
+# rolls the Pods that read it.
+#
+# The Deployment names the placeholder image `sermod`, which never resolves
+# on its own, and the images entry below makes it a published release. The
+# release pipeline replaces that entry with the digest it built; the entry
+# committed here is what an operator applying this tree by hand runs, and is
+# moved to a newer release by hand.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: latere
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
+  - ingress.yaml
+images:
+  - name: sermod
+    newName: ghcr.io/latere-ai/sermod
+    newTag: v0.2.0
+    digest: sha256:67dcff9e94f7ba00b07a11b66fa3fd3010534f555b2db3154879e45a4837162d
+configMapGenerator:
+  - name: sermod
+    envs:
+      - sermod.env

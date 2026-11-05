@@ -1,0 +1,16 @@
+# The core's one listener: the API under /v1/messaging and the probes beside
+# it. The ingress controller routes the prefix here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sermod
+  labels:
+    app.kubernetes.io/name: sermod
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sermod
+  ports:
+    - name: public
+      port: 8080
+      targetPort: public

@@ -1,0 +1,27 @@
+# Admits the core's Pods to platformd's internal TLS listener, which they ask
+# at /internal/sermo/authorize. It belongs to platformd's side of the
+# conversation and selects platformd's Pods, not the core's, so it is not in
+# deploy/prod: a rollout identity may name only its own service's Pods, and
+# the release pipeline would be refused it. An operator applies it once, and
+# again only if it changes:
+#
+#   kubectl apply -f deploy/bootstrap/networkpolicy-platformd-tls.yaml
+#
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sermod-platformd-tls
+  namespace: latere
+spec:
+  podSelector:
+    matchLabels:
+      app: platformd
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sermod
+      ports:
+        - port: 8443
+          protocol: TCP

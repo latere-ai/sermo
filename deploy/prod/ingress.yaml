@@ -1,0 +1,30 @@
+# The core's one rule at the platform origin: /v1/messaging on
+# api.latere.ai, beside /v1/connections and the other capabilities,
+# forwarded without a rewrite, because the core writes that prefix in front
+# of every route of its own. There is no tls block and no issuer annotation:
+# the host's certificate is the origin's, which arcad's Ingress holds for
+# every rule on api.latere.ai.
+#
+# The body limit is the core's own, SERMO_MAX_REQUEST_BYTES, 8 MiB: a commit
+# with its group info and ratchet tree for the largest group. A read of a
+# conversation's messages waits at most 30 seconds for one, inside the
+# controller's default read timeout of 60.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sermod
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 8m
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api.latere.ai
+      http:
+        paths:
+          - path: /v1/messaging
+            pathType: Prefix
+            backend:
+              service:
+                name: sermod
+                port:
+                  name: public

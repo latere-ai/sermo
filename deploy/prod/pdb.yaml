@@ -1,0 +1,13 @@
+# One of the 2 replicas may be evicted at a time, so a node drain leaves the
+# other serving.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sermod
+  labels:
+    app.kubernetes.io/name: sermod
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sermod

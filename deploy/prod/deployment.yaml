@@ -1,0 +1,158 @@
+# sermod, 2 replicas. The replicas hold no state of their own: every device
+# record, key package, conversation, message and group state is a row of the
+# database, so they are interchangeable and a rollout replaces them one at a
+# time with none missing. A read that waits for a message ends when a
+# replica stops, and the device reads again from another.
+#
+# SERMO_OIDC_ISSUERS is auth alone. SERMO_OIDC_AUDIENCE: `sermo` is the
+# core's own audience; `api.latere.ai` is the platform origin's, which the
+# apps' tokens name.
+#
+# The database: SERMO_DATABASE_URL is the direct endpoint of the database
+# sermo, which sermod opens for its migrations at start, under the
+# migrator's lock, and closes; the cluster's connection budget holds a
+# reserve for a starting Pod's migration. SERMO_DATABASE_POOL_URL is its
+# transaction-mode pool, whose 2 server connections, one per replica, are
+# the core's line in that budget and carry all of its serving. Both are the
+# keys terraform writes into sermo-db, and the pool is required, because a
+# Pod that served over the direct endpoint would take connections the
+# budget does not hold.
+#
+# The authorizer's bearer and the service key are files: the Secrets
+# sermod-authorizer and sermod-service-key mounted read-only. SSL_CERT_DIR
+# appends platformd's internal CA to the system roots, so the decider's
+# certificate verifies; the volume carries ca.crt alone, never the CA's
+# key.
+#
+# SERMO_INSTALLATION_KEY is unset, so the core admits no assistant: Latere
+# is off in every conversation.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sermod
+  labels:
+    app.kubernetes.io/name: sermod
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sermod
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sermod
+    spec:
+      serviceAccountName: sermod
+      automountServiceAccountToken: false
+      # Above the preStop sleep, the 3 seconds sermod keeps answering after
+      # a stop signal while readiness fails, and the 30 it then gives open
+      # requests.
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sermod
+          # The placeholder never resolves; the kustomization's images entry
+          # names the release this target runs.
+          image: sermod
+          envFrom:
+            - configMapRef:
+                name: sermod
+          env:
+            - name: SERMO_ADDR
+              value: ":8080"
+            - name: SERMO_OIDC_ISSUERS
+              value: https://auth.latere.ai
+            - name: SERMO_OIDC_AUDIENCE
+              value: sermo,api.latere.ai
+            - name: SSL_CERT_DIR
+              value: "/etc/ssl/certs:/var/run/sermod-trust"
+            - name: SERMO_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sermo-db
+                  key: SERMO_DATABASE_URL
+            - name: SERMO_DATABASE_POOL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sermo-db
+                  key: SERMO_DATABASE_POOL_URL
+          ports:
+            - name: public
+              containerPort: 8080
+          # Separate on purpose: a database that does not answer takes the
+          # Pod out of rotation and does not restart it. Readiness does not
+          # read the authorizer, whose outage fails the requests that need
+          # it.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: public
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: public
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          # A Pod told to stop is still in the Service for the moment its
+          # removal takes to reach every proxy; the kubelet's own sleep
+          # keeps the listener open through it, since the image has no
+          # shell and no sleep.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          # The request is what a replica holds at rest; the limits bound a
+          # burst of commits, each body at most 8 MiB.
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: authorizer
+              mountPath: /var/run/sermod-authorizer
+              readOnly: true
+            - name: service-key
+              mountPath: /var/run/sermod-service-key
+              readOnly: true
+            - name: internal-ca
+              mountPath: /var/run/sermod-trust
+              readOnly: true
+      volumes:
+        - name: authorizer
+          secret:
+            secretName: sermod-authorizer
+            items:
+              - key: token
+                path: token
+        - name: service-key
+          secret:
+            secretName: sermod-service-key
+            items:
+              - key: seed
+                path: seed
+        - name: internal-ca
+          secret:
+            secretName: platformd-internal-ca
+            items:
+              - key: ca.crt
+                path: platformd-internal-ca.crt

@@ -43,6 +43,13 @@ identity:
   # The audience is the default of a server somebody runs themselves; a
   # plane that fronts it verifies an audience of its own.
   reached_by: self-hosted
+  # deploy/prod is Latere's own overlay inside the core's tree; it names the
+  # installation it serves, so the no-latere-value rule reads the addresses
+  # it sets and does not refuse them.
+  skip:
+    - deploy/prod
+  overlays:
+    - deploy/prod
 
 # The store's migrations hold a session-scoped lock across their statements,
 # which a transaction-mode pooler loses between transactions, so they run over
