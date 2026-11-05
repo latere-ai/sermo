@@ -16,15 +16,12 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/url"
-	"strconv"
-	"strings"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5" // the pgx5:// driver pgxmigrate selects by scheme
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"latere.ai/x/pkg/pgxmigrate"
@@ -74,9 +71,12 @@ var _ store.Store = (*Store)(nil)
 // pool_* settings of the URL that opens it, and DefaultMaxConns and
 // DefaultMaxConnIdleTime where it names none.
 func Open(ctx context.Context, o Options) (*Store, error) {
-	direct, err := migrationURL(o.URL)
-	if err != nil {
+	if _, err := parseURL(o.URL, "database URL"); err != nil {
 		return nil, err
+	}
+	direct, err := pgxmigrate.DriverURL(o.URL)
+	if err != nil {
+		return nil, fmt.Errorf("store: the database URL: %w", err)
 	}
 	serving, which := o.URL, "database URL"
 	if o.PoolURL != "" {
@@ -152,99 +152,35 @@ func poolConfig(raw, which string) (*pgxpool.Config, error) {
 	return cfg, nil
 }
 
-// migrationURL is the direct URL under the scheme golang-migrate's pgx/v5
-// driver registers, without the pool_* settings: that driver opens a
-// single connection through pgx's stdlib, which sends a parameter it does
-// not know to the server as a setting, and the server refuses to start a
-// session with one it does not know either.
-func migrationURL(raw string) (string, error) {
-	u, err := parseURL(raw, "database URL")
-	if err != nil {
-		return "", err
-	}
-	q := u.Query()
-	for k := range q {
-		if strings.HasPrefix(k, "pool_") {
-			q.Del(k)
-		}
-	}
-	u.RawQuery = q.Encode()
-	u.Scheme = "pgx5"
-	return u.String(), nil
-}
-
-// prepare refuses a schema this binary does not know, and applies the
-// migrations not yet applied.
-func prepare(ctx context.Context, pool *pgxpool.Pool, direct string) error {
-	highest, err := highestOf(migrationFiles, migrationDir)
-	if err != nil {
-		return fmt.Errorf("store: %w", err)
-	}
-	if err := guard(ctx, pool, highest); err != nil {
-		return err
-	}
-	if err := pgxmigrate.Up(direct, migrationFiles, migrationDir); err != nil {
-		return fmt.Errorf("store: applying the schema: %w", err)
-	}
-	return nil
-}
-
-// guard reads schema_migrations before the migrator runs.
+// prepare applies the migrations not yet applied and refuses a schema
+// this binary does not know. The migrator reads the version and the dirty
+// flag under its own lock, so a replica that starts while another migrates
+// waits for it and does not take its migration in progress for a failed
+// one.
 //
 // A dirty flag means a migration failed halfway and the schema is at
-// neither version; an operator repairs it, and Up over it would report
-// the same failure with less to go on. A version above the newest this
-// binary carries means an older binary met a newer schema: Up reports
-// nothing to do, and every statement after it runs against tables this
-// code does not know.
-func guard(ctx context.Context, pool *pgxpool.Pool, highest uint64) error {
-	var (
-		version int64
-		dirty   bool
-	)
-	err := pool.QueryRow(ctx, "select version, dirty from schema_migrations").Scan(&version, &dirty)
+// neither version; an operator repairs it. A version above the newest this
+// binary carries means an older binary met a newer schema, and every
+// statement after it would run against tables this code does not know.
+func prepare(ctx context.Context, pool *pgxpool.Pool, direct string) error {
+	// A database that does not answer is told apart from a migration that
+	// failed.
+	if err := pool.Ping(ctx); err != nil {
+		return fmt.Errorf("store: the database does not answer: %w", err)
+	}
+	err := pgxmigrate.Up(direct, migrationFiles, migrationDir)
+	var dirty migrate.ErrDirty
 	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return nil // the migrator made its table and applied nothing
-	case undefinedTable(err):
-		return nil // a database with no schema yet
-	case err != nil:
-		return fmt.Errorf("store: reading the schema version: %w", err)
-	case dirty:
-		return fmt.Errorf("store: the schema is dirty at version %d: a migration failed halfway, and an operator repairs it before sermod starts", version)
-	case version < 0 || uint64(version) > highest:
-		return fmt.Errorf("store: the schema is at version %d and this binary carries %d: run the sermod that wrote the schema, or migrate down to %d", version, highest, highest)
+	case err == nil:
+		return nil
+	case errors.As(err, &dirty):
+		return fmt.Errorf("store: the schema is dirty at version %d: a migration failed halfway, and an operator repairs it before sermod starts", dirty.Version)
+	case errors.Is(err, pgxmigrate.ErrDirty):
+		return errors.New("store: the schema is dirty: a migration failed halfway, and an operator repairs it before sermod starts")
+	case errors.Is(err, pgxmigrate.ErrNewer):
+		return fmt.Errorf("store: run the sermod that wrote the schema, or migrate down: %w", err)
 	}
-	return nil
-}
-
-// undefinedTable reports the one Postgres code that means a fresh
-// database.
-func undefinedTable(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
-}
-
-// highestOf is the newest migration of a directory: the number its
-// files start with.
-func highestOf(files fs.FS, dir string) (uint64, error) {
-	entries, err := fs.ReadDir(files, dir)
-	if err != nil {
-		return 0, fmt.Errorf("reading the migrations: %w", err)
-	}
-	var highest uint64
-	for _, e := range entries {
-		number, _, _ := strings.Cut(e.Name(), "_")
-		n, err := strconv.ParseUint(number, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("the migration %q does not start with a number", e.Name())
-		}
-		highest = max(highest, n)
-	}
-	if highest == 0 {
-		return 0, errors.New("no migration is embedded")
-	}
-	return highest, nil
+	return fmt.Errorf("store: applying the schema: %w", err)
 }
 
 // fail is an error of the store's: a sentinel of the contract as it is,

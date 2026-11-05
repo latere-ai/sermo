@@ -8,8 +8,6 @@ import "time"
 // What the tests of package postgres_test reach inside the store.
 var (
 	MigrationFiles = migrationFiles
-	HighestOf      = highestOf
-	MigrationURL   = migrationURL
 )
 
 // MigrationDir is the directory of MigrationFiles the migrations are in.

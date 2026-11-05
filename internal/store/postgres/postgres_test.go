@@ -14,13 +14,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
 
+	"latere.ai/x/pkg/pgxmigrate"
 	"latere.ai/x/sdk-go/messaging"
 
 	"latere.ai/x/sermo/internal/store"
@@ -96,7 +96,7 @@ func TestOpenRefusesWhatIsNotAPostgresURL(t *testing.T) {
 		{"no URL at all", postgres.Options{URL: "postgres://sermo:" + password + "@[::1"}, "database URL is not a postgres:// URL"},
 		{"a pooled URL of another scheme", postgres.Options{URL: good, PoolURL: "http://sermo:" + password + "@127.0.0.1/"}, "pooled database URL is not a postgres:// URL"},
 		{"a pool setting that is not a number", postgres.Options{URL: good + "?pool_max_conns=many"}, "pool_* settings"},
-		{"a server that does not answer", postgres.Options{URL: good + "?connect_timeout=2"}, "reading the schema version"},
+		{"a server that does not answer", postgres.Options{URL: good + "?connect_timeout=2"}, "the database does not answer"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := postgres.Open(t.Context(), tc.o)
@@ -114,24 +114,11 @@ func TestOpenRefusesWhatIsNotAPostgresURL(t *testing.T) {
 	}
 }
 
-// TestTheMigrationURLKeepsNoPoolSetting: the migrator's URL is the direct
-// one under the scheme of golang-migrate's pgx/v5 driver, with every
-// setting but the pool's.
-func TestTheMigrationURLKeepsNoPoolSetting(t *testing.T) {
-	got, err := postgres.MigrationURL("postgresql://sermo:pw@db.example:5432/sermo?pool_max_conns=2&sslmode=require&pool_max_conn_idle_time=1m")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "pgx5://sermo:pw@db.example:5432/sermo?sslmode=require"; got != want {
-		t.Errorf("MigrationURL = %q, want %q", got, want)
-	}
-}
-
 // TestHighestIsWhatIsEmbedded: the number the store guards against is
 // read from the files this binary carries, and every migration has the
 // down half golang-migrate reads on the way back.
 func TestHighestIsWhatIsEmbedded(t *testing.T) {
-	highest, err := postgres.HighestOf(postgres.MigrationFiles, postgres.MigrationDir)
+	highest, err := pgxmigrate.HighestOf(postgres.MigrationFiles, postgres.MigrationDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +126,7 @@ func TestHighestIsWhatIsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if highest != uint64(len(ups)) {
+	if highest != uint(len(ups)) {
 		t.Errorf("the highest migration is %d over %d up file(s): a number is missing or taken twice", highest, len(ups))
 	}
 	for _, up := range ups {
@@ -147,38 +134,6 @@ func TestHighestIsWhatIsEmbedded(t *testing.T) {
 		if _, err := fs.Stat(postgres.MigrationFiles, down); err != nil {
 			t.Errorf("%s has no down migration: %v", up, err)
 		}
-	}
-}
-
-// TestHighestReadsTheNumber: a file whose name does not start with a
-// number is a migration golang-migrate would not order, so it is a
-// failure rather than a schema applied out of order.
-func TestHighestReadsTheNumber(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		files fstest.MapFS
-		want  uint64
-	}{
-		{"one", fstest.MapFS{"m/000001_directory.up.sql": {}}, 1},
-		{"the newest of several", fstest.MapFS{
-			"m/000001_a.up.sql": {}, "m/000012_b.up.sql": {}, "m/000002_c.down.sql": {},
-		}, 12},
-		{"no directory", fstest.MapFS{}, 0},
-		{"nothing in it", fstest.MapFS{"m": {Mode: fs.ModeDir}}, 0},
-		{"a name with no number", fstest.MapFS{"m/directory.up.sql": {}}, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := postgres.HighestOf(tc.files, "m")
-			if tc.want == 0 {
-				if err == nil {
-					t.Fatalf("%v was accepted as migration %d", tc.files, got)
-				}
-				return
-			}
-			if err != nil || got != tc.want {
-				t.Fatalf("highest = %d, %v, want %d", got, err, tc.want)
-			}
-		})
 	}
 }
 
@@ -191,7 +146,7 @@ func TestSchemaGuards(t *testing.T) {
 		name, statement, want string
 	}{
 		{"ahead of the binary", `update schema_migrations set version = 9999, dirty = false`, "9999"},
-		{"dirty", `update schema_migrations set dirty = true`, "dirty"},
+		{"dirty", `update schema_migrations set dirty = true`, "dirty at version"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dsn := database(t, admin)
@@ -244,7 +199,7 @@ func TestTheMigrationsGoDownAndUpAgain(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		u, err := postgres.MigrationURL(dsn)
+		u, err := pgxmigrate.DriverURL(dsn)
 		if err != nil {
 			t.Fatal(err)
 		}
