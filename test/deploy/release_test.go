@@ -290,9 +290,9 @@ func TestTheRolloutIdentityCoversExactlyWhatProdApplies(t *testing.T) {
 // Deployment runs once, with the published image behind it.
 func TestProdNamesTheImageTheDeployPins(t *testing.T) {
 	kustomization := read(t, "deploy/prod/kustomization.yaml")
-	pin := regexp.MustCompile(`(?m)^  - name: sermod\n    newName: ghcr\.io/latere-ai/sermod\n    newTag: v\d+\.\d+\.\d+\n    digest: sha256:[0-9a-f]{64}\n`)
+	pin := regexp.MustCompile(`(?m)^  - name: sermod\n    newName: ghcr\.io/latere-ai/sermod\n    newTag: v\d+\.\d+\.\d+\n(?:[^ ]|$)`)
 	if !pin.MatchString(kustomization) {
-		t.Error("deploy/prod/kustomization.yaml does not name the image sermod as ghcr.io/latere-ai/sermod, by a released tag and digest")
+		t.Error("deploy/prod/kustomization.yaml does not name the image sermod as ghcr.io/latere-ai/sermod, by a released tag, which the release stamps")
 	}
 	if n := strings.Count(kustomization, "\n    newName: "); n != 1 {
 		t.Errorf("deploy/prod/kustomization.yaml names %d images, want the one the release builds", n)

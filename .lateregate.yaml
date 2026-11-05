@@ -2,6 +2,13 @@
 # latere.ai/x/ci-gate, pinned in go.mod; only what is this repository's own
 # is here.
 
+# The production overlay names the release it runs; `lateregate release`
+# rewrites that version in the release commit, so it never lags a tag.
+release:
+  stamp:
+    - file: deploy/prod/kustomization.yaml
+      pattern: 'newTag: v\d+\.\d+\.\d+'
+
 license:
   spdx: Apache-2.0
   holder: Latere AI

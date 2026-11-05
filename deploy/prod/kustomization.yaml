@@ -13,11 +13,12 @@
 # The ConfigMap is generated here, so a change of a setting renames it and
 # rolls the Pods that read it.
 #
-# The Deployment names the placeholder image `sermod`, which never resolves
-# on its own, and the images entry below makes it a published release. The
-# release pipeline replaces that entry with the digest it built; the entry
-# committed here is what an operator applying this tree by hand runs, and is
-# moved to a newer release by hand.
+# The manifests name the image with the placeholder `sermod`, which the
+# images entry below resolves to the published image and the release this
+# target runs. `lateregate release` rewrites the version in the same commit
+# as the changelog section, under the release.stamp entry in
+# .lateregate.yaml, so this line never lags a tag. The release's deploy job
+# replaces the tag with the digest it built.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: latere
@@ -32,7 +33,6 @@ images:
   - name: sermod
     newName: ghcr.io/latere-ai/sermod
     newTag: v0.2.0
-    digest: sha256:67dcff9e94f7ba00b07a11b66fa3fd3010534f555b2db3154879e45a4837162d
 configMapGenerator:
   - name: sermod
     envs:
