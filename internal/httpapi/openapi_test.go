@@ -7,7 +7,8 @@ import (
 	"bytes"
 	"encoding"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -496,7 +497,7 @@ func jsonFields(t reflect.Type) []jsonField {
 		case name == "":
 			name = f.Name
 		}
-		out = append(out, jsonField{name: name, typ: f.Type, omitempty: slices.Contains(strings.Split(opts, ","), "omitempty")})
+		out = append(out, jsonField{name: name, typ: f.Type, omitempty: slices.Contains(strings.Split(opts, ","), "omitempty") || slices.Contains(strings.Split(opts, ","), "omitzero")})
 	}
 	return out
 }
@@ -624,7 +625,7 @@ func (c *checker) object(where string, s *schema, t reflect.Type, request bool) 
 		case !ok:
 			c.t.Errorf("%s requires %q, which it does not describe", where, name)
 		case f.omitempty:
-			c.t.Errorf("%s requires %q, which encoding/json leaves out when it is empty", where, name)
+			c.t.Errorf("%s requires %q, which encoding/json leaves out when it is empty or zero", where, name)
 		}
 	}
 	if request && (s.AdditionalProperties == nil || *s.AdditionalProperties) {
@@ -862,10 +863,8 @@ func holdToDocument(t testing.TB, method, path string, status int, body []byte) 
 		}
 		return
 	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
+	v, err := readAny(jsontext.NewDecoder(bytes.NewReader(body)))
+	if err != nil {
 		t.Errorf("%s with a body that is not JSON: %v", where, err)
 		return
 	}
@@ -876,6 +875,53 @@ func holdToDocument(t testing.TB, method, path string, status int, body []byte) 
 			t.Errorf("%s with the message %q for %s: %v", where, env.Error.Message, env.Error.Code, err)
 		}
 	}
+}
+
+// number is a JSON number as written, so an integer is checked by its
+// digits and not through a float.
+type number string
+
+// readAny reads one value as the types a decoded any holds, except that
+// a number stays a number.
+func readAny(dec *jsontext.Decoder) (any, error) {
+	switch dec.PeekKind() {
+	case '{':
+		if _, err := dec.ReadToken(); err != nil {
+			return nil, err
+		}
+		m := map[string]any{}
+		for dec.PeekKind() != '}' {
+			name, err := dec.ReadToken()
+			if err != nil {
+				return nil, err
+			}
+			if m[name.String()], err = readAny(dec); err != nil {
+				return nil, err
+			}
+		}
+		_, err := dec.ReadToken()
+		return m, err
+	case '[':
+		if _, err := dec.ReadToken(); err != nil {
+			return nil, err
+		}
+		a := []any{}
+		for dec.PeekKind() != ']' {
+			e, err := readAny(dec)
+			if err != nil {
+				return nil, err
+			}
+			a = append(a, e)
+		}
+		_, err := dec.ReadToken()
+		return a, err
+	case '0':
+		raw, err := dec.ReadValue()
+		return number(raw), err
+	}
+	var v any
+	err := json.UnmarshalDecode(dec, &v)
+	return v, err
 }
 
 // match is the operation a request reaches: the path template it fits
@@ -972,12 +1018,12 @@ func (d *document) validate(t testing.TB, where string, v any, s *schema) {
 			}
 		}
 	case "integer":
-		n, ok := v.(json.Number)
+		n, ok := v.(number)
 		if !ok {
 			t.Errorf("%s is %T, not an integer", where, v)
 			return
 		}
-		i, err := strconv.ParseInt(n.String(), 10, 64)
+		i, err := strconv.ParseInt(string(n), 10, 64)
 		switch {
 		case err != nil:
 			t.Errorf("%s is %s, not an integer: %v", where, n, err)

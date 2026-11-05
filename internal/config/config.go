@@ -12,7 +12,7 @@ package config
 import (
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -73,6 +73,16 @@ type Settings struct {
 
 	MaxRequestBytes int64         // SERMO_MAX_REQUEST_BYTES
 	Retention       time.Duration // SERMO_RETENTION
+}
+
+// MarshalJSON encodes the settings with Retention as integer
+// nanoseconds, the form a time.Duration has no default for.
+func (s Settings) MarshalJSON() ([]byte, error) {
+	type alias Settings
+	return json.Marshal(struct {
+		alias
+		Retention int64
+	}{alias(s), int64(s.Retention)})
 }
 
 // Durable reports whether the server keeps its state in a database.

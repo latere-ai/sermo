@@ -9,7 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -376,5 +376,17 @@ func TestBothFilesReported(t *testing.T) {
 		if !strings.Contains(err.Error(), w) {
 			t.Errorf("error %q does not say %q", err, w)
 		}
+	}
+}
+
+// TestSettingsJSONRetention checks that the retention encodes as integer
+// nanoseconds, byte for byte.
+func TestSettingsJSONRetention(t *testing.T) {
+	b, err := json.Marshal(config.Settings{Retention: 90 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"Retention":90000000000`)) || !bytes.HasSuffix(b, []byte(`"Retention":90000000000}`)) {
+		t.Fatalf("settings encode as %s, want Retention as integer nanoseconds", b)
 	}
 }

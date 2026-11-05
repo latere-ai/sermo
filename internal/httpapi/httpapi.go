@@ -9,14 +9,15 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"latere.ai/x/sdk-go/messaging"
@@ -169,7 +170,7 @@ func writeJSON(w http.ResponseWriter, log *slog.Logger, status int, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if _, err := w.Write(append(body, '\n')); err != nil {
+	if _, err := w.Write(body); err != nil {
 		log.Info("writing a response", slog.Any("cause", err))
 	}
 }
@@ -177,25 +178,30 @@ func writeJSON(w http.ResponseWriter, log *slog.Logger, status int, v any) {
 // decode reads a body strictly: one JSON value with no member the type
 // lacks.
 func decode(r *http.Request, v any) error {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	err := dec.Decode(v)
-	if err == nil {
-		if dec.More() || dec.Decode(&struct{}{}) != io.EOF {
-			return apierr.New(apierr.CodeInvalid, "the body holds more than one JSON value")
-		}
-		return nil
-	}
+	raw, err := io.ReadAll(r.Body)
 	var tooLarge *http.MaxBytesError
 	switch {
 	case errors.As(err, &tooLarge):
 		return apierr.New(apierr.CodeTooLarge, "the body is over the server's bound")
-	case strings.HasPrefix(err.Error(), "json: unknown field "):
-		return apierr.New(apierr.CodeUnknownField, strings.TrimPrefix(err.Error(), "json: "))
-	case errors.Is(err, io.EOF):
+	case err != nil:
+		return apierr.Wrap(apierr.CodeInvalid, err)
+	case len(bytes.TrimSpace(raw)) == 0:
 		return apierr.New(apierr.CodeInvalid, "the body is empty")
 	}
-	return apierr.Wrap(apierr.CodeInvalid, err)
+	dec := jsontext.NewDecoder(bytes.NewReader(raw))
+	if err := json.UnmarshalDecode(dec, v, json.RejectUnknownMembers(true)); err != nil {
+		if errors.Is(err, json.ErrUnknownName) {
+			var se *json.SemanticError
+			if errors.As(err, &se) {
+				return apierr.New(apierr.CodeUnknownField, "unknown field "+strconv.Quote(se.JSONPointer.LastToken()))
+			}
+		}
+		return apierr.Wrap(apierr.CodeInvalid, err)
+	}
+	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
+		return apierr.New(apierr.CodeInvalid, "the body holds more than one JSON value")
+	}
+	return nil
 }
 
 func query(r *http.Request, name string, def, max int64) (int64, error) {
@@ -372,7 +378,7 @@ type BackupList struct {
 	Records []StoredBackupRecord `json:"records"`
 	// Next is the cursor of the next page; it is set only when this one is
 	// full, and the next may be empty.
-	Next int64 `json:"next,omitempty"`
+	Next int64 `json:"next,omitzero"`
 }
 
 // Welcome is one Welcome for the calling device.
