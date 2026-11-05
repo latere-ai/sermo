@@ -32,7 +32,7 @@ resources:
 images:
   - name: sermod
     newName: ghcr.io/latere-ai/sermod
-    newTag: v0.2.0
+    newTag: v0.3.0
 configMapGenerator:
   - name: sermod
     envs:
