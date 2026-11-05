@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"latere.ai/x/pkg/authz"
 	"latere.ai/x/pkg/authz/stub"
+	"latere.ai/x/pkg/requestid"
 
 	"latere.ai/x/sermo/authorizer"
 	"latere.ai/x/sermo/internal/access"
@@ -66,6 +68,28 @@ func TestAuthorizerAsks(t *testing.T) {
 	}
 	if len(inner.asked) != 1 || !reflect.DeepEqual(inner.asked[0], want) {
 		t.Errorf("asked %+v, want %+v", inner.asked, want)
+	}
+}
+
+// TestAuthorizerChecksTheRequestID: a request id the client chose reaches
+// the authorizer only when it is visible ASCII of bounded length; any
+// other, or none, is replaced by a fresh one.
+func TestAuthorizerChecksTheRequestID(t *testing.T) {
+	for name, header := range map[string]string{
+		"a space": "req 1", "a newline": "req\n1", "too long": strings.Repeat("a", requestid.MaxLen+1), "none": "",
+	} {
+		inner := &recorder{decision: authz.Decision{Allow: true}}
+		r := httptest.NewRequest(http.MethodGet, "/v1/conversations/conv-1", nil)
+		if header != "" {
+			r.Header["X-Request-Id"] = []string{header}
+		}
+		if _, err := access.NewAuthorizer(inner).Authorize(context.Background(), caller(), r, authorizer.ActionConversationRead, conv1); err != nil {
+			t.Fatal(err)
+		}
+		got := inner.asked[0].Request.ID
+		if got == header || !requestid.Valid(got) {
+			t.Errorf("%s: the authorizer was told %q", name, got)
+		}
 	}
 }
 

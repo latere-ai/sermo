@@ -29,6 +29,7 @@ import (
 	"latere.ai/x/pkg/authkit/jwt"
 	"latere.ai/x/pkg/authz"
 	"latere.ai/x/pkg/bearer"
+	"latere.ai/x/pkg/requestid"
 
 	"latere.ai/x/sermo/authorizer"
 )
@@ -179,7 +180,8 @@ func (a *asker) Authorize(ctx context.Context, c Caller, r *http.Request, action
 	return Decision{Allow: true, Reason: d.Reason}, nil
 }
 
-// requestInfo is what the authorizer is told about the request.
+// requestInfo is what the authorizer is told about the request. Its id is
+// the client's when that is visible ASCII of bounded length, else a fresh one.
 func requestInfo(r *http.Request) authz.Caller {
 	if r == nil {
 		return authz.Caller{}
@@ -188,7 +190,7 @@ func requestInfo(r *http.Request) authz.Caller {
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	return authz.Caller{ID: r.Header.Get("X-Request-Id"), IP: host, UserAgent: r.UserAgent()}
+	return authz.Caller{ID: requestid.FromRequest(r), IP: host, UserAgent: r.UserAgent()}
 }
 
 // Check sends the probe every authorizer denies and reports one that
