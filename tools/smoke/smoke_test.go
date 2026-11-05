@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -47,11 +46,13 @@ func stubVersion(t *testing.T, version http.HandlerFunc) *httptest.Server {
 
 func script(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller")
+	// A test runs in its package directory, which holds up under -trimpath,
+	// where a source path from runtime.Caller does not.
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("working directory: %v", err)
 	}
-	return filepath.Join(filepath.Dir(file), "release.sh")
+	return filepath.Join(dir, "release.sh")
 }
 
 // run executes the script and returns its combined output and whether it

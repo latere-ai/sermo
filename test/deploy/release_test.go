@@ -11,20 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
 )
 
-// root is the repository root.
+// root is the repository root. A test runs in its package directory, which
+// holds up under -trimpath, where a source path from runtime.Caller does not.
 func root(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller")
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("working directory: %v", err)
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..")
+	return filepath.Join(dir, "..", "..")
 }
 
 func read(t *testing.T, rel string) string {
