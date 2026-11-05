@@ -8,6 +8,14 @@ here is refused before it is pushed.
 
 ### Added
 
+- **A release can deploy itself.** The release workflow has a `deploy` job
+  between the build and the publish, which applies `deploy/prod` with the
+  image pinned by digest, waits for the rollout and runs
+  `tools/smoke/release.sh` against the live origin. It runs only where the
+  repository variable `SERMO_RELEASE_DEPLOY` is set, so a fork publishes
+  every artifact and deploys nothing. `deploy/prod` holds Latere's
+  production manifests and `deploy/bootstrap` the identity the job deploys
+  with and the one policy an operator applies by hand.
 - **`GET /v1/messaging/version` is public.** It answers the build's
   `version`, `commit` and `build_time` with no token, so a deployment
   behind an ingress that forwards only `/v1/messaging` shows which release
