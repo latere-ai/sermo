@@ -43,20 +43,7 @@ type MemberPolicy struct{}
 
 // Authorize answers one request.
 func (p MemberPolicy) Authorize(_ context.Context, req authz.Request) (authz.Decision, error) {
-	d := p.decide(req)
-	if !d.Allow {
-		return d, nil
-	}
-	grants, ok := parseGrants(req.Claims)
-	if !ok { // a token whose grants do not read is refused, as no grant covers the request
-		return authz.Decision{Reason: authz.ReasonGrant}, nil
-	}
-	return authz.Restrict(authorizer.Core, d, req, grants), nil
-}
-
-func parseGrants(claims map[string]any) (authz.Grants, bool) {
-	g, err := authz.ParseGrants(claims)
-	return g, err == nil
+	return authz.RestrictByClaims(authorizer.Core, p.decide(req), req), nil
 }
 
 // Decide is Authorize under the name latere.ai/x/pkg/authz/server calls
