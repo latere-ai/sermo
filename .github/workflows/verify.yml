@@ -1,11 +1,27 @@
 # Every push to main and every pull request runs the gate, the shared
 # pipeline of latere-ai/ci.
 name: verify
+
+# A push or pull request that changes only specs or markdown starts no run,
+# because no build or test reads them. The exception is specs/003-identity-and-
+# authorization.md, whose action table a test holds to the authorizer.
+# `lateregate release` runs the whole bar, the spec tree included, before every
+# tag. A tag is never filtered by paths.
 on:
   push:
     branches: [main]
     tags: ['v*']
+    paths:
+      - "**"
+      - "!specs/**"
+      - "!**.md"
+      - "specs/003-identity-and-authorization.md"
   pull_request:
+    paths:
+      - "**"
+      - "!specs/**"
+      - "!**.md"
+      - "specs/003-identity-and-authorization.md"
   workflow_dispatch:
 
 # A newer push to the same ref supersedes this run: its commit carries every
