@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/latere-ai/sermo/security/advisories/new
+    about: Report it privately, as SECURITY.md describes, never as an issue.
+  - name: Running sermod, building a client, writing an authorizer
+    url: https://github.com/latere-ai/sermo/blob/main/docs/README.md
+    about: Install, configuration, the API, the authorizer's contract, and security.
