@@ -6,6 +6,13 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+### Added
+
+- **`GET /v1/messaging/version` is public.** It answers the build's
+  `version`, `commit` and `build_time` with no token, so a deployment
+  behind an ingress that forwards only `/v1/messaging` shows which release
+  it runs. The release smoke compares the served version with the tag.
+
 ## v0.2.0 - 2026-11-03
 
 ### Added

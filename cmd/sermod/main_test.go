@@ -27,6 +27,7 @@ import (
 
 	"latere.ai/x/pkg/authkit/issuertest"
 	"latere.ai/x/pkg/authz/stub"
+	"latere.ai/x/pkg/otel"
 	"latere.ai/x/sdk-go/messaging"
 
 	"latere.ai/x/sermo/authorizer"
@@ -287,6 +288,20 @@ func TestServe(t *testing.T) {
 	}
 	if code, _ := get(t, s.base+httpapi.Prefix+"/people/alice/devices", ""); code != http.StatusUnauthorized {
 		t.Errorf("a request with no token: %d", code)
+	}
+	// The build identity is public below the prefix the ingress forwards,
+	// with no token, and is the body the root serves.
+	root, rootBody := get(t, s.base+"/version", "")
+	under, underBody := get(t, s.base+httpapi.Prefix+"/version", "")
+	var build struct {
+		Version string `json:"version"`
+	}
+	if under != http.StatusOK || root != http.StatusOK || !bytes.Equal(rootBody, underBody) ||
+		json.Unmarshal(underBody, &build) != nil || build.Version != otel.Version(version.Version) {
+		t.Errorf("%s/version: %d %s, the root's: %d %s", httpapi.Prefix, under, underBody, root, rootBody)
+	}
+	if code, _ := do(t, http.MethodPost, s.base+httpapi.Prefix+"/version", "", nil); code == http.StatusOK {
+		t.Errorf("POST %s/version answered %d", httpapi.Prefix, code)
 	}
 
 	token := iss.Mint(issuertest.Claims{Sub: "alice"})

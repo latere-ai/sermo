@@ -12,21 +12,25 @@
 #
 # Environment:
 #   BASE_URL   the public origin that serves the API, such as
-#              https://api.latere.ai; required
-#   TAG        the release being proved. Sermo's version is not served on any
-#              public route (see below), so it is recorded in the evidence and
-#              not compared with anything.
+#              https://api.example.com; required. The API prefix,
+#              /v1/messaging, is added by the script.
+#   TAG        the release being proved; when set the served version must
+#              equal it
 #   COMMIT     the release commit, for the evidence
 #   DEPLOY_URL the run that deployed it, for the evidence
 #   OUTPUT_MD  where to write the Markdown evidence; nowhere when unset
 #
-# What is public: the ingress claims /v1/messaging on api.latere.ai and
-# nothing else. sermod serves /livez, /readyz and /version at its own root,
-# which no ingress rule routes, so there is no public health route and no
-# public route that reports the version. Missing: a version (and a readiness)
-# route under /v1/messaging. Until one exists, the one thing this can prove is
-# that the origin routes the prefix to sermod, which answers an unauthenticated
-# request with 401 and a JSON error. A 404 means the route is not claimed.
+# What is public: the ingress claims /v1/messaging and nothing else.
+# sermod serves /livez and /readyz at its own root, which no ingress rule
+# routes, so there is no public health route. Its build version is served
+# below the prefix.
+#
+# Checks, in order, stopping at the first failure:
+#   1. GET /v1/messaging/conversations answers 401 with a JSON error, so the
+#      origin routes the prefix to sermod, which refuses a request with no
+#      token. A 404 means the route is not claimed.
+#   2. GET /v1/messaging/version serves a version, and when TAG is set it
+#      equals TAG.
 
 set -euo pipefail
 
@@ -55,8 +59,20 @@ code=$(curl -sS --max-time 20 -o "$tmp/body" -w '%{http_code}' "${BASE_URL}${pat
 grep -q '"error"' "$tmp/body" || fail "GET ${path}: 401 without a JSON error, so sermod did not answer"
 pass "GET ${path} (401, answered by sermod)"
 
+
+vpath="/v1/messaging/version"
+code=$(curl -sS --max-time 20 -o "$tmp/version" -w '%{http_code}' "${BASE_URL}${vpath}") \
+  || fail "GET ${vpath}: no answer from ${BASE_URL}"
+[ "$code" = "200" ] || fail "GET ${vpath}: expected 200, got ${code} (body: $(head -c 200 "$tmp/version" 2>/dev/null || true))"
+pass "GET ${vpath} (200)"
+# `|| true`: grep exits 1 on no match, and the message below should be said.
+served=$(grep -o '"version":"[^"]*"' "$tmp/version" | head -1 | cut -d'"' -f4 || true)
+[ -n "$served" ] || fail "GET ${vpath}: no version in $(head -c 200 "$tmp/version")"
 if [ -n "$TAG" ]; then
-  pass "version not publicly readable; ${TAG} not compared"
+  [ "$served" = "$TAG" ] || fail "version mismatch: served $served, expected $TAG"
+  pass "served version matches the tag ($served)"
+else
+  pass "served version recorded ($served)"
 fi
 
 if [ -n "$OUTPUT_MD" ]; then
@@ -70,7 +86,7 @@ if [ -n "$OUTPUT_MD" ]; then
     [ -n "$DEPLOY_URL" ] && echo "- Deploy: ${DEPLOY_URL}"
     echo "- Origin: ${BASE_URL}"
     echo "- Route: \`GET ${path}\` answered 401 with a JSON error, so the origin routes the prefix to sermod"
-    echo "- Version: not publicly readable, so the served version was not compared with the tag"
+    echo "- Served version: \`${served}\`${TAG:+, equal to the tag}"
   } > "$OUTPUT_MD"
 fi
 

@@ -214,8 +214,23 @@ func build(ctx context.Context, s config.Settings, logger *slog.Logger) (*server
 	for _, path := range []string{"GET /livez", "GET /readyz", "GET /version"} {
 		mux.Handle(path, probes)
 	}
+	// The build identity is also public below the API prefix, the one path
+	// the ingress forwards, so a release check reads it from outside. It
+	// takes no token and is the body /version serves.
+	mux.Handle("GET "+httpapi.Prefix+"/version", versionAt(probes))
 	ok = true
 	return &server{svc: svc, handler: mux, stopping: stopping, storeKind: storeKind, authorizerKind: authorizerKind, close: closeStore}, nil
+}
+
+// versionAt serves the answer of the probes' /version at the path it is
+// mounted on, so the build identity below the API prefix is the very body
+// the root serves.
+func versionAt(probes http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rooted := r.Clone(r.Context())
+		rooted.URL.Path, rooted.URL.RawPath = "/version", ""
+		probes.ServeHTTP(w, rooted)
+	})
 }
 
 // durable is a store kept in a database, closed when the server stops.
