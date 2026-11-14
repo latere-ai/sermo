@@ -74,13 +74,3 @@ spec:
       ports:
         - port: 443
           protocol: TCP
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: dash0-system
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: opentelemetry-collector
-      ports:
-        - port: 4318
-          protocol: TCP

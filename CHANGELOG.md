@@ -6,6 +6,12 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+### Changed
+
+- **The network policy no longer admits the Dash0 collector.** The collector
+  is retired, so the egress rule to it is gone. Telemetry export stays off
+  until a deployment sets `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
 ## v0.3.0 - 2026-11-05
 
 ### Added
