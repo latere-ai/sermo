@@ -8,6 +8,8 @@ here is refused before it is pushed.
 
 ### Changed
 
+- Built with Go 1.27.4, which fixes GO-2026-6859.
+
 - **The network policy no longer admits the Dash0 collector.** The collector
   is retired, so the egress rule to it is gone. Telemetry export stays off
   until a deployment sets `OTEL_EXPORTER_OTLP_ENDPOINT`.
