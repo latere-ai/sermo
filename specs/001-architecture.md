@@ -63,7 +63,7 @@ flowchart LR
 | Key packages | Each device's pool of one-time key packages and its last resort | The key packages' secrets |
 | Log | Every message of a conversation, numbered in one sequence; one commit per epoch, the first to arrive; the group's public state after each commit; the latest group info | A message's plaintext |
 | Recovery | Each person's recovery record and wrapped backup key, and a backup key sealed to a new device until it fetches it | A key that opens them |
-| Backup records | Each person's sealed record of each message, by conversation and id, in the order stored (specs/004-backup-records.md) | The backup key, or a record's plaintext |
+| Backup records | Each person's sealed record of each message, by conversation and id, in the order stored (specs/.archive/004-backup-records.md) | The backup key, or a record's plaintext |
 | The assistant's member | Its MLS state per conversation, sealed under a data key of that conversation, while the level is not Off | Its state after the level is Off: the data key is destroyed first |
 
 ### The profile
@@ -167,7 +167,7 @@ or post.
    which asks Sermo, through `conversation.membership`, whether a reader
    is one of a conversation's people. Backup records are the exception:
    each is small, read by its owner alone, and needs an order Sermo
-   assigns, so Sermo keeps them (specs/004-backup-records.md).
+   assigns, so Sermo keeps them (specs/.archive/004-backup-records.md).
 
 ## Acceptance criteria
 

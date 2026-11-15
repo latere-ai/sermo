@@ -1,6 +1,6 @@
 ---
 title: "Backup records: each person's history, one sealed record per message, kept as ciphertext beside the log and read back by a new device"
-status: drafted
+status: complete
 track: core
 depends_on:
   - specs/001-architecture.md
@@ -9,7 +9,7 @@ depends_on:
 affects: [internal/conv/, internal/httpapi/, internal/store/, api/openapi.yaml]
 effort: medium
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-15
 author: changkun
 ---
 
@@ -68,3 +68,10 @@ decision is recorded in the architecture's fifth invariant.
    records.
 5. The retention sweep leaves every record, and a canary planted in a
    record is found in no log line.
+
+## Outcome
+
+Shipped in v0.2.0. Commit 53e2e5d added the backup routes to
+`api/openapi.yaml`, the records in the memory and Postgres stores
+(migration 000005), `internal/conv/backup.go` and the handlers in
+`internal/httpapi`, with tests for each acceptance criterion above.
