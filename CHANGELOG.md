@@ -6,6 +6,8 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+## v0.4.0 - 2026-11-15
+
 ### Added
 
 - **`latere.ai/x/sermo/server` runs Sermo inside another Go program.**
