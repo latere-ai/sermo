@@ -105,6 +105,13 @@ flowchart LR
   devices seal; the server keeps none, and answers whether a reader is
   one of a conversation's people.
 
+## Embedding
+
+A Go program can run Sermo in its own process, behind its own router and
+authorizer, with `latere.ai/x/sermo/server`: `server.New` builds it,
+`Handler` is the API under `server.Prefix`, and the listener, probes and
+shutdown stay yours. [Embedding Sermo](docs/embedding.md) has the options.
+
 ## Documentation
 
 | | |
@@ -114,6 +121,7 @@ flowchart LR
 | [Configuration](docs/configuration.md) | every `SERMO_*` variable, its default, and what refuses a start |
 | [API](docs/api.md) | the conventions, the flows a device follows, the errors, and the limits |
 | [Writing an authorizer](docs/authorizer.md) | the question the server sends, the vocabulary, and the member policy |
+| [Embedding Sermo](docs/embedding.md) | the API inside your own Go program, behind your own router and authorizer |
 | [Security](docs/security.md) | what an installation guarantees, what the server sees, and what an operator keeps safe |
 
 [`docs/README.md`](docs/README.md) is the index, and

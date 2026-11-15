@@ -9,8 +9,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,17 +22,14 @@ import (
 	"syscall"
 	"time"
 
+	"latere.ai/x/pkg/authz"
 	"latere.ai/x/pkg/health"
 	"latere.ai/x/pkg/otel"
 
 	"latere.ai/x/sermo/internal/access"
 	"latere.ai/x/sermo/internal/config"
-	"latere.ai/x/sermo/internal/conv"
-	"latere.ai/x/sermo/internal/httpapi"
-	"latere.ai/x/sermo/internal/store"
-	"latere.ai/x/sermo/internal/store/memory"
-	"latere.ai/x/sermo/internal/store/postgres"
 	"latere.ai/x/sermo/internal/version"
+	sermo "latere.ai/x/sermo/server"
 )
 
 // Timing of a start and a stop. On a stop, readiness answers 503 at
@@ -42,12 +37,8 @@ import (
 // closes within the grace period; a read waiting for messages ends when
 // the stop begins.
 const (
-	drainDelay  = 3 * time.Second
-	gracePeriod = 30 * time.Second
-	warmTimeout = 10 * time.Second
-	// openTimeout bounds opening the database and running its
-	// migrations at start.
-	openTimeout   = time.Minute
+	drainDelay    = 3 * time.Second
+	gracePeriod   = 30 * time.Second
 	clientTimeout = 10 * time.Second
 	readyTimeout  = 2 * time.Second
 	flushTimeout  = 5 * time.Second
@@ -115,19 +106,19 @@ func runWith(ctx context.Context, args []string, getenv func(string) string, std
 	if err != nil {
 		return fail(stderr, err)
 	}
-	defer srv.close()
+	defer srv.core.Close()
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", settings.Addr)
 	if err != nil {
 		return fail(stderr, fmt.Errorf("SERMO_ADDR: %w", err))
 	}
-	_, _ = fmt.Fprintf(stdout, "sermod: %s listening on %s store=%s authorizer=%s\n", release, ln.Addr(), srv.storeKind, srv.authorizerKind)
+	_, _ = fmt.Fprintf(stdout, "sermod: %s listening on %s store=%s authorizer=%s\n", release, ln.Addr(), srv.core.StoreKind(), srv.authorizerKind)
 
 	sweepDone := make(chan struct{})
 	go func() {
 		defer close(sweepDone)
-		sweep(ctx, srv.svc, settings.Retention, min(sweepEvery, settings.Retention/2), logger)
+		srv.core.Sweep(ctx, min(sweepEvery, settings.Retention/2))
 	}()
 	err = serve(ctx, ln, srv, o.drain, logger)
 	<-sweepDone
@@ -139,60 +130,37 @@ func runWith(ctx context.Context, args []string, getenv func(string) string, std
 
 // server is what one run serves.
 type server struct {
-	svc            *conv.Service
+	core           *sermo.Server
 	handler        http.Handler
 	stopping       *atomic.Bool
-	storeKind      string
 	authorizerKind string
-	close          func()
 }
 
-// build opens the store, the verifier and the authorizer, and mounts the
-// API and the probes on one handler.
+// build opens the messaging server and mounts its API and the probes on
+// one handler.
 func build(ctx context.Context, s config.Settings, logger *slog.Logger) (*server, error) {
-	key := s.ServiceKey.Private()
-	if key == nil {
-		// A server without a database keeps nothing across a restart, so
-		// a key made here serves every group it will ever hold.
-		var err error
-		if _, key, err = ed25519.GenerateKey(rand.Reader); err != nil {
-			return nil, err
-		}
-	}
-	st, storeKind, closeStore, err := openStore(ctx, s)
-	if err != nil {
-		return nil, err
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			closeStore()
-		}
-	}()
-
 	client := &http.Client{Transport: otel.Transport(nil), Timeout: clientTimeout}
 	authz, authorizerKind, err := openAuthorizer(ctx, s, client)
 	if err != nil {
 		return nil, err
 	}
-	verifier, err := access.NewVerifier(s.OIDCIssuers, s.OIDCAudiences, client, time.Now)
+	core, err := sermo.New(ctx, sermo.Options{
+		DatabaseURL:     s.DatabaseURL.Reveal(),
+		DatabasePoolURL: s.DatabasePoolURL.Reveal(),
+		Authorizer:      authz,
+		OIDCIssuers:     s.OIDCIssuers,
+		OIDCAudiences:   s.OIDCAudiences,
+		ServiceKey:      s.ServiceKey.Private(),
+		Installation:    s.InstallationKey,
+		MaxRequestBytes: s.MaxRequestBytes,
+		Retention:       s.Retention,
+		HTTPClient:      client,
+		Logger:          logger,
+	})
 	if err != nil {
-		return nil, err
-	}
-	warm, cancel := context.WithTimeout(ctx, warmTimeout)
-	defer cancel()
-	if err := verifier.Warm(warm); err != nil {
-		// The key sets are read again on the first token, so an issuer
-		// that is down at start delays sign-ins, not the server.
-		logger.WarnContext(ctx, "an issuer's key set could not be read at start", "err", err)
-	}
-
-	svc, err := conv.New(conv.Options{Store: st, Authorizer: authz, ServiceKey: key, Installation: s.InstallationKey})
-	if err != nil {
-		return nil, err
-	}
-	api, err := httpapi.New(httpapi.Options{Service: svc, Authenticator: verifier, MaxRequestBytes: s.MaxRequestBytes, Logger: logger})
-	if err != nil {
+		if errors.Is(err, sermo.ErrDatabase) {
+			err = fmt.Errorf("SERMO_DATABASE_URL: %w", err)
+		}
 		return nil, err
 	}
 	stopping := &atomic.Bool{}
@@ -204,22 +172,21 @@ func build(ctx context.Context, s config.Settings, logger *slog.Logger) (*server
 				}
 				return nil
 			}},
-			health.Check{Name: "store", Run: func(ctx context.Context) error { return ping(ctx, st) }},
+			health.Check{Name: "store", Run: core.Ping},
 		),
 		Timeout: readyTimeout,
 		Version: otel.Version(version.Version),
 	})
 	mux := http.NewServeMux()
-	mux.Handle(httpapi.Prefix+"/", otel.Handler(api, "sermo"))
+	mux.Handle(sermo.Prefix+"/", otel.Handler(core.Handler(), "sermo"))
 	for _, path := range []string{"GET /livez", "GET /readyz", "GET /version"} {
 		mux.Handle(path, probes)
 	}
 	// The build identity is also public below the API prefix, the one path
 	// the ingress forwards, so a release check reads it from outside. It
 	// takes no token and is the body /version serves.
-	mux.Handle("GET "+httpapi.Prefix+"/version", versionAt(probes))
-	ok = true
-	return &server{svc: svc, handler: mux, stopping: stopping, storeKind: storeKind, authorizerKind: authorizerKind, close: closeStore}, nil
+	mux.Handle("GET "+sermo.Prefix+"/version", versionAt(probes))
+	return &server{core: core, handler: mux, stopping: stopping, authorizerKind: authorizerKind}, nil
 }
 
 // versionAt serves the answer of the probes' /version at the path it is
@@ -233,49 +200,13 @@ func versionAt(probes http.Handler) http.Handler {
 	})
 }
 
-// durable is a store kept in a database, closed when the server stops.
-type durable interface {
-	store.Store
-	Close()
-}
-
-// openPostgres opens the Postgres store, running its migrations first; a
-// test stands in for it.
-var openPostgres = func(ctx context.Context, o postgres.Options) (durable, error) { return postgres.Open(ctx, o) }
-
-// openStore opens the store the settings name: Postgres for a database
-// URL, and memory, which keeps nothing across a restart, without one.
-func openStore(ctx context.Context, s config.Settings) (store.Store, string, func(), error) {
-	if !s.Durable() {
-		return memory.New(time.Now), "memory", func() {}, nil
-	}
-	opening, cancel := context.WithTimeout(ctx, openTimeout)
-	defer cancel()
-	st, err := openPostgres(opening, postgres.Options{URL: s.DatabaseURL.Reveal(), PoolURL: s.DatabasePoolURL.Reveal()})
-	if err != nil {
-		// The store's errors never carry the URL, whose password this
-		// line would print.
-		return nil, "", nil, fmt.Errorf("SERMO_DATABASE_URL: %w", err)
-	}
-	return st, "postgres", st.Close, nil
-}
-
-// ping asks a store that can answer whether it is reachable; one that
-// cannot, the memory store, always is.
-func ping(ctx context.Context, st store.Store) error {
-	if p, ok := st.(interface{ Ping(context.Context) error }); ok {
-		return p.Ping(ctx)
-	}
-	return nil
-}
-
 // openAuthorizer is the authorizer the settings name: the endpoint
 // asked for every decision, which must refuse the probe every
-// authorizer refuses before the server starts, or the member policy in
-// process without one.
-func openAuthorizer(ctx context.Context, s config.Settings, client *http.Client) (access.Authorizer, string, error) {
+// authorizer refuses before the server starts, or nil, the member
+// policy in process, without one.
+func openAuthorizer(ctx context.Context, s config.Settings, client *http.Client) (authz.Authorizer, string, error) {
 	if s.AuthorizerURL == "" {
-		return access.NewAuthorizer(access.MemberPolicy{}), "member policy", nil
+		return nil, "member policy", nil
 	}
 	remote, err := access.NewClient(s.AuthorizerURL, s.AuthorizerToken.Reveal(), client, time.Now)
 	if err != nil {
@@ -284,7 +215,7 @@ func openAuthorizer(ctx context.Context, s config.Settings, client *http.Client)
 	if err := access.Check(ctx, remote); err != nil {
 		return nil, "", fmt.Errorf("SERMO_AUTHORIZER_URL: the authorizer failed the probe it must refuse: %w", err)
 	}
-	return access.NewAuthorizer(remote), "remote", nil
+	return remote, "remote", nil
 }
 
 // serve serves on ln until ctx is done, then stops: readiness fails,
@@ -319,32 +250,6 @@ func serve(ctx context.Context, ln net.Listener, srv *server, drain time.Duratio
 	stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), gracePeriod)
 	defer cancel()
 	return errors.Join(hs.Shutdown(stop), <-served)
-}
-
-// sweeper deletes what is past the retention.
-type sweeper interface {
-	Sweep(ctx context.Context, retention time.Duration) (int, error)
-}
-
-// sweep deletes expired messages at start and then every interval until
-// ctx is done. A failed sweep is logged and tried again at the next.
-func sweep(ctx context.Context, s sweeper, retention, every time.Duration, logger *slog.Logger) {
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		n, err := s.Sweep(ctx, retention)
-		switch {
-		case err != nil && ctx.Err() == nil:
-			logger.ErrorContext(ctx, "the sweep of expired messages failed", "err", err)
-		case n > 0:
-			logger.InfoContext(ctx, "expired messages deleted", "count", n)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
 }
 
 func fail(stderr io.Writer, err error) int {

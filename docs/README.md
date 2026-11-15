@@ -23,6 +23,7 @@ authorizer it asks.
 |---|---|
 | [API](api.md) | the conventions, the flows a device follows from its first record to a conversation, backup records, the errors to branch on, and the limits |
 | [Writing an authorizer](authorizer.md) | the question `sermod` sends, the answer, failing closed, the vocabulary, and the member policy without one |
+| [Embedding Sermo](embedding.md) | `latere.ai/x/sermo/server`: the API inside your own Go program, behind your own router and authorizer |
 
 The OpenAPI document is [`api/openapi.yaml`](../api/openapi.yaml). A
 device's client is

@@ -6,6 +6,14 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+### Added
+
+- **`latere.ai/x/sermo/server` runs Sermo inside another Go program.**
+  `server.New` opens the store and builds the API, `Handler` serves it
+  under `server.Prefix` for your own router, and your own authorizer can
+  replace the member policy. `sermod` is built on the same package.
+  See [Embedding Sermo](docs/embedding.md).
+
 ### Changed
 
 - Built with Go 1.27.4, which fixes GO-2026-6859.

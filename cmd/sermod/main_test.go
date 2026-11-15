@@ -12,7 +12,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json/v2"
-	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -32,9 +31,6 @@ import (
 
 	"latere.ai/x/sermo/authorizer"
 	"latere.ai/x/sermo/internal/httpapi"
-	"latere.ai/x/sermo/internal/store"
-	"latere.ai/x/sermo/internal/store/memory"
-	"latere.ai/x/sermo/internal/store/postgres"
 	"latere.ai/x/sermo/internal/version"
 )
 
@@ -124,43 +120,6 @@ func TestStartFailures(t *testing.T) {
 
 // canaryPassword is a database password no output may carry.
 const canaryPassword = "canary-db-password-6c1f"
-
-// closing is a store kept in a database, with what the server did to it.
-type closing struct {
-	store.Store
-	pings, closes atomic.Int32
-}
-
-func (c *closing) Ping(context.Context) error { c.pings.Add(1); return nil }
-func (c *closing) Close()                     { c.closes.Add(1) }
-
-// A database URL opens the Postgres store with both endpoints the
-// settings name, which readiness pings and a stop closes once.
-func TestDurableStore(t *testing.T) {
-	iss := issuertest.New(t, issuertest.WithDefaultAudience("sermo"))
-	_, seed := seedFile(t)
-	db := &closing{Store: memory.New(time.Now)}
-	var opened postgres.Options
-	was := openPostgres
-	openPostgres = func(_ context.Context, o postgres.Options) (durable, error) { opened = o; return db, nil }
-	t.Cleanup(func() { openPostgres = was })
-	s := start(t, map[string]string{"SERMO_OIDC_ISSUERS": iss.URL(), "SERMO_ADDR": "127.0.0.1:0",
-		"SERMO_DATABASE_URL": "postgres://direct.example/sermo", "SERMO_DATABASE_POOL_URL": "postgres://pooled.example/sermo",
-		"SERMO_SERVICE_KEY_FILE": seed})
-	if !strings.Contains(s.line, "store=postgres") {
-		t.Errorf("the start line: %q", s.line)
-	}
-	if opened.URL != "postgres://direct.example/sermo" || opened.PoolURL != "postgres://pooled.example/sermo" {
-		t.Errorf("opened %+v", opened)
-	}
-	if code, _ := get(t, s.base+"/readyz", ""); code != http.StatusOK || db.pings.Load() == 0 {
-		t.Errorf("/readyz: %d after %d pings", code, db.pings.Load())
-	}
-	s.stop(t)
-	if n := db.closes.Load(); n != 1 {
-		t.Errorf("the store was closed %d times", n)
-	}
-}
 
 // An authorizer that cannot answer the probe stops the start; one that
 // refuses it is the authorizer the server asks.
@@ -410,71 +369,6 @@ func TestServeListenerFails(t *testing.T) {
 	srv := &server{stopping: new(atomic.Bool), handler: http.NotFoundHandler()}
 	if err := serve(t.Context(), ln, srv, 0, slog.New(slog.DiscardHandler)); err == nil {
 		t.Error("serving on a closed listener succeeded")
-	}
-}
-
-// fakeSweeper answers each sweep in turn.
-type fakeSweeper struct {
-	mu      sync.Mutex
-	answers []error
-	calls   int
-	done    chan struct{}
-}
-
-func (f *fakeSweeper) Sweep(context.Context, time.Duration) (int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	i := f.calls
-	f.calls++
-	if f.calls == len(f.answers) {
-		close(f.done)
-	}
-	if i < len(f.answers) {
-		if err := f.answers[i]; err != nil {
-			return 0, err
-		}
-		return 2, nil
-	}
-	return 0, nil
-}
-
-// The sweep runs at start and on each tick, logs what it deleted and a
-// failure, and goes on after one.
-func TestSweep(t *testing.T) {
-	f := &fakeSweeper{answers: []error{nil, errors.New("the store is down"), nil}, done: make(chan struct{})}
-	var logs syncBuffer
-	ctx, cancel := context.WithCancel(t.Context())
-	stopped := make(chan struct{})
-	go func() {
-		sweep(ctx, f, time.Hour, 5*time.Millisecond, slog.New(slog.NewTextHandler(&logs, nil)))
-		close(stopped)
-	}()
-	<-f.done
-	cancel()
-	<-stopped
-	out := logs.String()
-	if strings.Count(out, "expired messages deleted") < 2 || !strings.Contains(out, "the store is down") {
-		t.Errorf("the sweep logged:\n%s", out)
-	}
-}
-
-// pinging is a store that answers a ping.
-type pinging struct {
-	store.Store
-	err error
-}
-
-func (p pinging) Ping(context.Context) error { return p.err }
-
-// Readiness asks a store that answers a ping, and takes one that does
-// not as reachable.
-func TestPing(t *testing.T) {
-	down := errors.New("down")
-	if err := ping(t.Context(), pinging{err: down}); !errors.Is(err, down) {
-		t.Errorf("a store that is down: %v", err)
-	}
-	if err := ping(t.Context(), memory.New(time.Now)); err != nil {
-		t.Errorf("the memory store: %v", err)
 	}
 }
 
