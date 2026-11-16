@@ -1,0 +1,50 @@
+# What reaches sermod, what it reaches, and only that.
+#
+# In: the ingress controller, on the one port. Fill in the namespace label
+# if your controller does not run in `ingress-nginx`.
+#
+# Out:
+# - the resolver;
+# - the database, on 5432 or the port your provider uses; fill in the ports,
+#   and narrow the rule to the database's address where it has a fixed one;
+# - the issuer's discovery document and key set, over https on 443, and your
+#   authorizer if you set one, on whichever port it listens.
+# Nothing else: sermod calls no other service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sermod
+  labels:
+    app.kubernetes.io/name: sermod
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sermod
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 5432
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP

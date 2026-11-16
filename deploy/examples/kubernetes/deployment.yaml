@@ -4,28 +4,26 @@
 # time with none missing. A read that waits for a message ends when a
 # replica stops, and the device reads again from another.
 #
-# SERMO_OIDC_ISSUERS is auth alone. SERMO_OIDC_AUDIENCE: `sermo` is the
-# core's own audience; `api.latere.ai` is the platform origin's, which the
-# apps' tokens name.
+# Fill in: SERMO_OIDC_ISSUERS below, and the two Secrets this Deployment
+# reads, created outside this tree.
 #
-# The database: SERMO_DATABASE_URL is the direct endpoint of the database
-# sermo, which sermod opens for its migrations at start, under the
-# migrator's lock, and closes; the cluster's connection budget holds a
-# reserve for a starting Pod's migration. SERMO_DATABASE_POOL_URL is its
-# transaction-mode pool, whose 2 server connections, one per replica, are
-# the core's line in that budget and carry all of its serving. Both are the
-# keys terraform writes into sermo-db, and the pool is required, because a
-# Pod that served over the direct endpoint would take connections the
-# budget does not hold.
+# The database: SERMO_DATABASE_URL is the direct endpoint of the database,
+# which sermod opens for its migrations at start, under the migrator's lock,
+# and closes. SERMO_DATABASE_POOL_URL is the address serving opens, a
+# transaction-mode pooler where you run one; with none, set it to the same
+# address as the direct one. Both are keys of the Secret sermo-db. Each
+# replica holds at most 4 pooled connections, so size the database's limit
+# for the replicas plus one starting replica's migration.
 #
-# The authorizer's bearer and the service key are files: the Secrets
-# sermod-authorizer and sermod-service-key mounted read-only. SSL_CERT_DIR
-# appends platformd's internal CA to the system roots, so the decider's
-# certificate verifies; the volume carries ca.crt alone, never the CA's
-# key.
+# The server's key is a file: the Secret sermod-service-key mounted
+# read-only, made once with `openssl rand -base64 32` and kept for the life
+# of the database (docs/install.md, "The server's key").
 #
-# SERMO_INSTALLATION_KEY is unset, so the core admits no assistant: Latere
-# is off in every conversation.
+# SERMO_AUTHORIZER_URL is unset, so the member policy decides. To use your
+# own authorizer, set it in sermod.env, mount its bearer from a Secret and
+# name the file in SERMO_AUTHORIZER_TOKEN_FILE (docs/authorizer.md).
+#
+# SERMO_INSTALLATION_KEY is unset, so the server admits no assistant.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -70,12 +68,12 @@ spec:
           env:
             - name: SERMO_ADDR
               value: ":8080"
+            # Fill in: the issuer whose tokens are accepted, and the
+            # audience they name; `sermo` is the default.
             - name: SERMO_OIDC_ISSUERS
-              value: https://auth.latere.ai
+              value: https://issuer.example.com
             - name: SERMO_OIDC_AUDIENCE
-              value: sermo,api.latere.ai
-            - name: SSL_CERT_DIR
-              value: "/etc/ssl/certs:/var/run/sermod-trust"
+              value: sermo
             - name: SERMO_DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -128,31 +126,13 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: authorizer
-              mountPath: /var/run/sermod-authorizer
-              readOnly: true
             - name: service-key
               mountPath: /var/run/sermod-service-key
               readOnly: true
-            - name: internal-ca
-              mountPath: /var/run/sermod-trust
-              readOnly: true
       volumes:
-        - name: authorizer
-          secret:
-            secretName: sermod-authorizer
-            items:
-              - key: token
-                path: token
         - name: service-key
           secret:
             secretName: sermod-service-key
             items:
               - key: seed
                 path: seed
-        - name: internal-ca
-          secret:
-            secretName: platformd-internal-ca
-            items:
-              - key: ca.crt
-                path: platformd-internal-ca.crt

@@ -1,0 +1,36 @@
+# An installation of sermod on Kubernetes, to copy and adapt: the
+# Deployment, Service, ServiceAccount, PodDisruptionBudget, NetworkPolicy and
+# Ingress, and a ConfigMap generated from sermod.env. Apply it with
+# `kubectl apply -k deploy/examples/kubernetes` once the places marked
+# "Fill in" hold your values.
+#
+# Fill in: the namespace below, the host in ingress.yaml, the issuer in
+# deployment.yaml, and the settings in sermod.env.
+#
+# The Secrets sermo-db and sermod-service-key are created outside this tree
+# and keep their names; docs/install.md says what each holds. The ConfigMap
+# is generated here, so a change of a setting renames it and rolls the Pods
+# that read it.
+#
+# The manifests name the image with the placeholder `sermod`, which the
+# images entry below resolves to the published image. Each release updates
+# the tag to its own version. Pin a digest or mirror the image to your own
+# registry if your policy asks for it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sermo
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
+  - ingress.yaml
+images:
+  - name: sermod
+    newName: ghcr.io/latere-ai/sermod
+    newTag: v0.4.0
+configMapGenerator:
+  - name: sermod
+    envs:
+      - sermod.env
