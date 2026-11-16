@@ -6,6 +6,20 @@ here is refused before it is pushed.
 
 ## Unreleased
 
+### Changed
+
+- **`deploy/prod` is now `deploy/examples/kubernetes`.** It is a generic
+  installation to adapt: the hostname, namespace, issuer and database
+  ports are placeholders marked "Fill in", it expects the Secrets
+  `sermo-db` and `sermod-service-key`, and it decides with the member
+  policy until you set an authorizer. The image tag in it still follows
+  each release.
+- **A release no longer rolls anything out.** The release workflow builds,
+  signs and publishes the image and verifies the published release; it
+  has no deploy stage, and `deploy/bootstrap`, the identity that stage
+  used, is gone. `tools/smoke/release.sh` remains for you to run against
+  your own installation after an upgrade.
+
 ## v0.4.0 - 2026-11-15
 
 ### Added
