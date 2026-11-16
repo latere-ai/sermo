@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Latere AI
 # SPDX-License-Identifier: Apache-2.0
 #
-# The live check after a deploy of sermod. The release pipeline runs it once
-# the rollout is done; an operator can run it by hand against an installation.
+# The live check after a deploy of sermod. An operator runs it by hand
+# against an installation once a rollout is done.
 # It sends unauthenticated, read-only requests and changes nothing, so it can
 # run any number of times. It does not wait: the caller runs it again until it
 # passes.

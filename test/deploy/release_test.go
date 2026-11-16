@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Latere AI
 // SPDX-License-Identifier: Apache-2.0
 
-// Package deploy holds the tests of what the release pipeline deploys: the
-// shape of the release workflow, and the production overlay and the rollout
-// identity it is applied with. Each reads the files as text, because a
-// workflow carries expressions the manifests do not.
+// Package deploy holds the tests of the release workflow's shape and of the
+// Kubernetes example in deploy/examples/kubernetes. Each reads the files as
+// text, because a workflow carries expressions the manifests do not.
 package deploy
 
 import (
@@ -63,16 +62,15 @@ func job(t *testing.T, text, name string) string {
 const stage = "latere-ai/ci/.github/workflows/"
 
 // TestTheReleaseRunsThroughTheSharedStagesInOrder holds the pipeline's
-// shape: the build stage builds, signs and attests the image; the deploy
-// stage rolls what it pushed; only then does the publish stage tag the
-// digest and create the release, and the verify stage read it back.
+// shape: the build stage builds, signs and attests the image; the publish
+// stage tags the digest and creates the release; the verify stage reads it
+// back.
 func TestTheReleaseRunsThroughTheSharedStagesInOrder(t *testing.T) {
 	text := workflow(t)
 	needs := regexp.MustCompile(`(?m)^    needs: (.+)$`)
 	for _, want := range []struct{ job, uses, needs string }{
 		{"build", "image-build.yml", ""},
-		{"deploy", "image-deploy.yml", "build"},
-		{"publish", "image-publish.yml", "[build, deploy]"},
+		{"publish", "image-publish.yml", "build"},
 		{"verify", "release-verify.yml", "publish"},
 	} {
 		block := job(t, text, want.job)
@@ -94,79 +92,18 @@ func TestTheReleaseRunsThroughTheSharedStagesInOrder(t *testing.T) {
 	}
 }
 
-// TestTheDeployJobIsGatedAndCallsTheDeployStage holds the one job that
-// reaches a cluster to the two things that keep it off every other
-// repository: the repository variable that gates it and the secret it hands
-// the shared stage.
-func TestTheDeployJobIsGatedAndCallsTheDeployStage(t *testing.T) {
-	block := job(t, workflow(t), "deploy")
-	for _, want := range []string{
-		"\n    if: ${{ vars.SERMO_RELEASE_DEPLOY != '' }}",
-		"\n    uses: " + stage + "image-deploy.yml@v1\n",
-		"\n      DEPLOY_KUBECONFIG: ${{ secrets.SERMO_KUBECONFIG }}",
-		"\n    permissions:\n      contents: read\n",
-		"\n      url: https://api.latere.ai\n",
-		"\n      runs_on: ubuntu-latest\n",
-		"\n      deployments: |\n        sermod\n",
-	} {
-		if !strings.Contains(block, want) {
-			t.Errorf("the deploy job does not carry %q", strings.TrimSpace(want))
-		}
-	}
-	// The stage owns the kubeconfig, the apply and the smoke; none of them
-	// is written out again here.
-	for _, gone := range []string{"kubectl", "kustomize", "sed -i", "tools/smoke/release.sh"} {
-		if strings.Contains(block, gone) {
-			t.Errorf("the deploy job runs %q itself; image-deploy.yml does", gone)
-		}
-	}
-}
-
-// TestTheDeployPassesOnlySermodByDigest: the build pushes the image by digest
-// under no tag, and the publish stage gives the tag only after the deploy
-// has passed, so the stage is given the digest and never the tag, under the
-// name the overlay gives the image.
-func TestTheDeployPassesOnlySermodByDigest(t *testing.T) {
-	block := job(t, workflow(t), "deploy")
-	want := "\n      images: sermod=${{ needs.build.outputs.ref_1 }}@${{ needs.build.outputs.digest_1 }}\n"
-	if !strings.Contains(block, want) {
-		t.Error("the deploy job does not pass sermod as the overlay's name for it, pinned by digest")
-	}
-	for _, not := range []string{"needs.build.outputs.images", "ref_2", "digest_2", ":${TAG}", "github.ref_name"} {
-		if strings.Contains(block, not) {
-			t.Errorf("the deploy job names %q; it passes only the sermod image, by digest", not)
-		}
-	}
-	if n := strings.Count(block, "\n      images:"); n != 1 {
-		t.Errorf("the deploy job has %d images inputs, want 1", n)
-	}
-}
-
-// TestPublishAndVerifyTolerateASkippedDeploy: deploy is skipped on every
-// repository that sets no SERMO_RELEASE_DEPLOY, and a job that leans on the
-// implicit success() is skipped whenever a job above it is. Publish names
-// each result, and fails on a deploy that failed or was cancelled.
-func TestPublishAndVerifyTolerateASkippedDeploy(t *testing.T) {
+// TestTheReleaseDeploysNothing: the pipeline builds and publishes and
+// reaches no cluster, so no job reads a kubeconfig secret or a variable that
+// switches a rollout on, and none calls the shared deploy stage.
+func TestTheReleaseDeploysNothing(t *testing.T) {
 	text := workflow(t)
-	publish := job(t, text, "publish")
-	for _, want := range []string{
-		"always()",
-		"needs.build.result == 'success'",
-		"needs.deploy.result != 'failure'",
-		"needs.deploy.result != 'cancelled'",
-	} {
-		if !strings.Contains(publish, want) {
-			t.Errorf("publish does not carry %q in its condition", want)
+	for _, not := range []string{"SERMO_KUBECONFIG", "SERMO_RELEASE_DEPLOY", "image-deploy.yml", "kubectl"} {
+		if strings.Contains(text, not) {
+			t.Errorf("release.yml names %s; the release deploys nothing", not)
 		}
 	}
-	// The smoke evidence exists only when the deploy ran; an evidence
-	// pattern that names no file fails the publish stage.
-	if !strings.Contains(publish, "evidence: ${{ needs.deploy.result == 'success' && 'smoke-evidence' || '' }}") {
-		t.Error("publish does not name the smoke evidence only when the deploy succeeded")
-	}
-	verify := job(t, text, "verify")
-	if !strings.Contains(verify, "if: ${{ always() && needs.publish.result == 'success' }}") {
-		t.Error("verify does not run on a skipped deploy")
+	if strings.Contains(text, "\n  deploy:\n") {
+		t.Error("release.yml has a deploy job; the release deploys nothing")
 	}
 }
 
@@ -196,143 +133,63 @@ func TestEveryThirdPartyActionIsPinned(t *testing.T) {
 			t.Errorf("release.yml:%d: %s is pinned to %q, which is not a commit", i+1, ref, version)
 		}
 	}
-	if len(versions) != 4 {
-		t.Errorf("the workflow calls %d shared stages, want build, deploy, publish and verify", len(versions))
+	if len(versions) != 3 {
+		t.Errorf("the workflow calls %d shared stages, want build, publish and verify", len(versions))
 	}
 	if distinct := slices.Compact(slices.Sorted(slices.Values(versions))); len(distinct) > 1 {
 		t.Errorf("the shared stages are called at %v, want one version", distinct)
 	}
 }
 
-// kinds is the Kubernetes resource each kind in deploy/prod is applied as.
-var kinds = map[string]string{
-	"Deployment":          "deployments",
-	"Service":             "services",
-	"ServiceAccount":      "serviceaccounts",
-	"ConfigMap":           "configmaps",
-	"Ingress":             "ingresses",
-	"NetworkPolicy":       "networkpolicies",
-	"PodDisruptionBudget": "poddisruptionbudgets",
-}
+// example is the Kubernetes example, relative to the repository root.
+const example = "deploy/examples/kubernetes"
 
-// prodResources is the set of resources deploy/prod applies: the kind of
-// every document of its manifests, and ConfigMap where the kustomization
-// generates one.
-func prodResources(t *testing.T) []string {
-	t.Helper()
-	dir := filepath.Join(root(t), "deploy/prod")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kind := regexp.MustCompile(`(?m)^kind: (\w+)\s*$`)
-	var out []string
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) != ".yaml" || e.Name() == "kustomization.yaml" {
-			continue
-		}
-		for _, m := range kind.FindAllStringSubmatch(read(t, "deploy/prod/"+e.Name()), -1) {
-			resource, ok := kinds[m[1]]
-			if !ok {
-				t.Errorf("deploy/prod/%s holds a %s, which the rollout identity's grant does not cover; add it to deploy/bootstrap/rollout-identity.yaml and to this test", e.Name(), m[1])
-			}
-			out = append(out, resource)
-		}
-	}
-	if strings.Contains(read(t, "deploy/prod/kustomization.yaml"), "configMapGenerator:") {
-		out = append(out, "configmaps")
-	}
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
-// TestTheRolloutIdentityCoversExactlyWhatProdApplies: the Role allows apply
-// on the kinds deploy/prod holds and no others, never touches Secrets, and
-// never deletes; the token Secret is bound to the account it names.
-func TestTheRolloutIdentityCoversExactlyWhatProdApplies(t *testing.T) {
-	identity := read(t, "deploy/bootstrap/rollout-identity.yaml")
-	role := identity[strings.Index(identity, "kind: Role\n"):strings.Index(identity, "kind: RoleBinding")]
-
-	var granted []string
-	list := regexp.MustCompile(`(?m)^\s+resources: \[(.*)\]\s*$`)
-	for _, m := range list.FindAllStringSubmatch(role, -1) {
-		for r := range strings.SplitSeq(m[1], ",") {
-			granted = append(granted, strings.Trim(strings.TrimSpace(r), `"`))
-		}
-	}
-	slices.Sort(granted)
-	granted = slices.Compact(granted)
-	if want := prodResources(t); !slices.Equal(granted, want) {
-		t.Errorf("the Role grants %v, deploy/prod applies %v", granted, want)
-	}
-	for _, not := range []string{`"secrets"`, `"delete"`, `"namespaces"`, `"*"`, "ClusterRole"} {
-		if strings.Contains(identity, not) {
-			t.Errorf("the rollout identity names %s; it holds no such grant", not)
-		}
-	}
-	if !strings.Contains(role, `resources: ["deployments"]`+"\n"+`    verbs: ["watch"]`) {
-		t.Error("the Role does not let the rollout watch the Deployment")
-	}
-	for _, want := range []string{
-		"name: sermod-rollout\n  namespace: latere",
-		"kubernetes.io/service-account.name: sermod-rollout",
-		"type: kubernetes.io/service-account-token",
-		"the `SERMO_KUBECONFIG` repository secret",
-	} {
-		if !strings.Contains(identity, want) {
-			t.Errorf("the rollout identity does not carry %q", want)
-		}
-	}
-}
-
-// TestProdNamesTheImageTheDeployPins: the deploy stage sets the image by the
-// name the overlay gives it, so the kustomization names the placeholder the
-// Deployment runs once, with the published image behind it.
-func TestProdNamesTheImageTheDeployPins(t *testing.T) {
-	kustomization := read(t, "deploy/prod/kustomization.yaml")
+// TestTheExampleNamesThePublishedImage: the kustomization names the
+// placeholder the Deployment runs once, with the published image behind it
+// at a released tag, which a release updates.
+func TestTheExampleNamesThePublishedImage(t *testing.T) {
+	kustomization := read(t, example+"/kustomization.yaml")
 	pin := regexp.MustCompile(`(?m)^  - name: sermod\n    newName: ghcr\.io/latere-ai/sermod\n    newTag: v\d+\.\d+\.\d+\n(?:[^ ]|$)`)
 	if !pin.MatchString(kustomization) {
-		t.Error("deploy/prod/kustomization.yaml does not name the image sermod as ghcr.io/latere-ai/sermod, by a released tag, which the release stamps")
+		t.Error(example + "/kustomization.yaml does not name the image sermod as ghcr.io/latere-ai/sermod, by a released tag")
 	}
 	if n := strings.Count(kustomization, "\n    newName: "); n != 1 {
-		t.Errorf("deploy/prod/kustomization.yaml names %d images, want the one the release builds", n)
+		t.Errorf("%s/kustomization.yaml names %d images, want the one the release builds", example, n)
 	}
-	if !strings.Contains(read(t, "deploy/prod/deployment.yaml"), "          image: sermod\n") {
-		t.Error("the Deployment does not run the image the overlay names, under the placeholder name")
+	if !strings.Contains(read(t, example+"/deployment.yaml"), "          image: sermod\n") {
+		t.Error("the Deployment does not run the image the kustomization names, under the placeholder name")
 	}
 }
 
-// TestProdSelectsOnlyItsOwnPods: a rollout identity may write an object that
-// selects its own service's Pods and no other's, so every selector at the
-// top of a policy in deploy/prod names sermod. The policy that selects
-// platformd's Pods is platform's, in latere-ai/platform deploy/prod.
-func TestProdSelectsOnlyItsOwnPods(t *testing.T) {
-	text := read(t, "deploy/prod/networkpolicy.yaml")
+// TestTheExampleSelectsOnlySermodPods: the one policy selects sermod's own
+// Pods and no other's.
+func TestTheExampleSelectsOnlySermodPods(t *testing.T) {
+	text := read(t, example+"/networkpolicy.yaml")
 	_, afterSpec, ok := strings.Cut(text, "\nspec:\n  podSelector:\n    matchLabels:\n")
 	if !ok {
-		t.Fatal("deploy/prod/networkpolicy.yaml has no policy selecting Pods")
+		t.Fatal(example + "/networkpolicy.yaml has no policy selecting Pods")
 	}
 	if !strings.HasPrefix(afterSpec, "      app.kubernetes.io/name: sermod\n") {
-		t.Error("the policy in deploy/prod does not select the core's Pods")
+		t.Error("the policy does not select sermod's Pods")
 	}
 	if n := strings.Count(text, "\nkind: NetworkPolicy\n"); n != 1 {
-		t.Errorf("deploy/prod/networkpolicy.yaml holds %d policies, want the core's alone", n)
+		t.Errorf("%s/networkpolicy.yaml holds %d policies, want one", example, n)
 	}
 }
 
-// TestProdHoldsNoCredential: the overlay is a public file. It names the
-// Secrets the Deployment reads, and holds none of their values.
-func TestProdHoldsNoCredential(t *testing.T) {
-	dir := filepath.Join(root(t), "deploy/prod")
+// TestTheExampleHoldsNoCredential: the example is a public file. It names
+// the Secrets the Deployment reads, and holds none of their values.
+func TestTheExampleHoldsNoCredential(t *testing.T) {
+	dir := filepath.Join(root(t), example)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		text := read(t, "deploy/prod/"+e.Name())
+		text := read(t, example+"/"+e.Name())
 		for _, not := range []string{"kind: Secret\n", "stringData:", "\ndata:", "BEGIN ", "_KEY=", "_SECRET=", "_TOKEN=", "://postgres", "postgres://"} {
 			if strings.Contains(text, not) {
-				t.Errorf("deploy/prod/%s holds %q; a credential belongs in a Secret created outside the tree", e.Name(), strings.TrimSpace(not))
+				t.Errorf("%s/%s holds %q; a credential belongs in a Secret created outside the tree", example, e.Name(), strings.TrimSpace(not))
 			}
 		}
 	}
